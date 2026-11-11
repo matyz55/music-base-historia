@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{akcja}: zrobione {w.get('zrobione')}, pozostało {w.get('pozostalo')} ({time.monotonic() - t0:.0f} s)", flush=True)
             if not w.get("pozostalo"):
                 break
+            # przerwa: Odbiornik ma jedną blokadę, a ta nie ustawia czekających w kolejce – bez przerwy
+            # pobieranie historii i aktualizacja bieżąca czekałyby na swoją kolej w nieskończoność
+            time.sleep(20)
     return 0
 
 
