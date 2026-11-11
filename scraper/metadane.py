@@ -23,6 +23,7 @@ import urllib.request
 
 from .magazyn import BladOdbiornika, MagazynDysk
 from .normalize import tytul, wykonawca, wykonawcy
+from .disco_polo import gatunki_pass
 from .songster import SONGS_URL, Indeks, wczytaj
 
 MB = "https://musicbrainz.org/ws/2"
@@ -160,10 +161,20 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-minuty", type=float, default=10)
     ap.add_argument("--limit", type=int, default=5000, help="ile utworów bez metadanych pobrać z Odbiornika")
-    ap.add_argument("--jezyk-minuty", type=float, default=None, help="ile minut na ustalanie języka tekstu (domyślnie połowa czasu)")
+    ap.add_argument("--jezyk-minuty", type=float, default=None, help="ile minut na ustalanie języka tekstu (domyślnie 1/3 czasu)")
+    ap.add_argument("--gatunek-minuty", type=float, default=None, help="ile minut na sprawdzanie disco polo (domyślnie 1/3 czasu)")
     a = ap.parse_args(argv)
-    jez_min = a.max_minuty / 2 if a.jezyk_minuty is None else a.jezyk_minuty
-    koniec = time.monotonic() + (a.max_minuty - jez_min) * 60
+    jez_min = a.max_minuty / 3 if a.jezyk_minuty is None else a.jezyk_minuty
+    gat_min = a.max_minuty / 3 if a.gatunek_minuty is None else a.gatunek_minuty
+    koniec = time.monotonic() + (a.max_minuty - jez_min - gat_min) * 60
+    try:
+        return _metadane(a, jez_min, koniec)
+    finally:
+        if gat_min > 0:
+            gatunki_pass(MagazynDysk(), time.monotonic() + gat_min * 60)
+
+
+def _metadane(a, jez_min: float, koniec: float) -> int:
     mag = MagazynDysk()
     try:
         braki = mag.wyslij("kluczeBezMetadanych", limit=a.limit)["klucze"]
