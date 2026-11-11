@@ -17,10 +17,10 @@ concurrency:
 jobs:
   historia:
     runs-on: ubuntu-latest
-    timeout-minutes: 350
+    timeout-minutes: 355
     steps:
       - uses: actions/checkout@v4
-      - name: Pobieraj historię (do 330 min)
+      - name: Pobieraj historię (do 300 min + ostatni zapis)
         env:
           ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
           ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
@@ -29,15 +29,18 @@ jobs:
             echo "Brak sekretów ODBIORNIK_URL / ODBIORNIK_TOKEN – pomijam."
             exit 0
           fi
-          python3 -m scraper.backfill --magazyn dysk --max-minuty 330 | tee wynik.txt
+          python3 -m scraper.backfill --magazyn dysk --max-minuty 300 | tee wynik.txt
       # Harmonogram GitHuba potrafi pominąć uruchomienia na kilka godzin (11.11.2026: 1–2 z ~12), więc
       # gdy praca nie jest skończona, zadanie od razu zleca następne. Repozytorium publiczne – minuty bez opłat.
+      # always(): także po przerwaniu przez limit czasu zadania (11.11.2026 tydzień + zapis czekający na blokadę
+      # Odbiornika przekroczyły 350 min) – kolejne zadanie wznawia od pierwszej niepobranej doby
       - name: Następne zadanie od razu, jeśli zostało coś do zrobienia
-        if: success()
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ -f wynik.txt ] && grep -q "Limit czasu" wynik.txt; then
+          # tylko gdy coś pobrano (bez tego awaria albo brak sekretów zlecałyby zadania w kółko)
+          if [ -f wynik.txt ] && grep -q -E "Tydzień|Limit czasu" wynik.txt && ! grep -q "cała historia pobrana" wynik.txt; then
             gh workflow run historia.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" && echo "Zlecono kolejne zadanie."
           else
             echo "Nic nie zostało – kolejne zadanie tylko z harmonogramu."
