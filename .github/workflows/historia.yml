@@ -1,0 +1,29 @@
+# Jednorazowe pobranie całej historii playlist z odSluchane.eu na Dysk Google (przez Apps Script „Odbiornik”).
+# Repozytorium publiczne tylko na czas pobierania (darmowe minuty); dane NIE trafiają do repozytorium.
+# Zadanie trwa do ~5,5 h, harmonogram co godzinę uruchamia kolejne, aż wszystko będzie pobrane
+# (postęp jest zapisany na Dysku, każde zadanie wznawia od pierwszego niepobranego miesiąca).
+# Sekrety repozytorium: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: Pobieranie historii
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: historia
+  cancel-in-progress: false
+jobs:
+  historia:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pobieraj historię (do 330 min)
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then
+            echo "Brak sekretów ODBIORNIK_URL / ODBIORNIK_TOKEN – pomijam."
+            exit 0
+          fi
+          python3 -m scraper.backfill --magazyn dysk --max-minuty 330
