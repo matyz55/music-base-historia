@@ -43,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise
             czeka = f", czeka na dojrzałość: {w['czeka']}" if w.get("czeka") else ""
             print(f"{akcja}: zrobione {w.get('zrobione')}, pozostało {w.get('pozostalo')}{czeka} ({time.monotonic() - t0:.0f} s)", flush=True)
+            if w.get("diag"):   # co zrobiło wywołanie (lata stacji / całego radia, indeks utworów, miesiące, paczki)
+                print(f"    {w['diag']}", flush=True)
             if not w.get("pozostalo"):
                 break
             # przerwa: Odbiornik ma jedną blokadę, a ta nie ustawia czekających w kolejce – bez przerwy
