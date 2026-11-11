@@ -90,7 +90,7 @@ class MagazynDysk:
         tresc = json.dumps({"akcja": akcja, "token": self.token, **dane}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.url, data=tresc, headers={"Content-Type": "application/json"})
         ostatni = None
-        for _ in range(4):
+        for _ in range(8):  # przy zajętej blokadzie Odbiornika łącznie do ~4 min czekania
             try:
                 # Apps Script odpowiada przekierowaniem 302; urllib przechodzi pod nowy adres metodą GET – tak ma być
                 with urllib.request.urlopen(req, timeout=420) as odp:
