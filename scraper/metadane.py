@@ -89,21 +89,36 @@ class MusicBrainz:
         return wynik
 
 
-PL_SLOWA = set("i w się nie na że to jak ja ty mi mnie cię ci jest być tak już czy co ale bo gdy kiedy jeszcze tylko my nas nam wy was tu tam ten ta te mój moja twój twoja jestem będzie był była chcę".split())
-EN_SLOWA = set("the you and i me my to is it in that of on your for love be all we don't i'm can just know so oh baby what when like now never".split())
+PL_SLOWA = set("w się nie że to jak ja ty mnie cię jest być tak już czy co ale bo gdy kiedy jeszcze tylko my nas nam wy was tam ten mój moja twój twoja jestem będzie był była chcę".split())
+EN_SLOWA = set("the you and me my to is it in that of on your for love be all we don't i'm can just know so oh baby what when like now never".split())
+# Inne języki: słowa funkcyjne, które pokrywają się z polskimi krótkimi słowami („a”, „i”, „na”, „te”, „mi”) –
+# bez nich włoski albo hiszpański tekst bywał liczony jako polski (test na lrclib.net 11.11.2026: 3 z 22 błędnie).
+INNE_SLOWA = {
+    "es": set("el la los las que de y en un una por con para mi tu te yo es no lo le se del al como más pero quiero amor corazón".split()),
+    "it": set("il la che di e un una non per con mi ti io sei è sono come ma più amore della nel cosa siamo".split()),
+    "fr": set("le la les et je tu il de un une pas que qui est dans pour avec mon ma moi toi c'est on ne plus".split()),
+    "de": set("der die das und ich du nicht ist ein eine mit zu dich mich mein dein auf wir es so was wie".split()),
+    "pt": set("o a os as que de e um uma não eu você meu minha com para por do da mais te".split()),
+}
+LITERY_PL = set("ąćęłńśźż")
+LITERY_INNE = set("àâäçèéêëîïìíòôöùûüúñßãõ")
 
 
 def jezyk_tekstu(tekst: str) -> str:
-    """Prosta ocena języka: słowa funkcyjne + polskie litery. Zwraca pl, en albo inny."""
-    slowa = re.findall(r"[a-ząćęłńóśźż']+", tekst.lower())
+    """Ocena języka tekstu: słowa funkcyjne + litery charakterystyczne. Zwraca pl, en, inny albo "" (za krótki)."""
+    slowa = re.findall(r"[^\W\d_]+(?:'[^\W\d_]+)?", tekst.lower())
     if len(slowa) < 15:
         return ""
-    pl = sum(w in PL_SLOWA for w in slowa) + 3 * sum(any(c in w for c in "ąćęłńśźż") for w in slowa)
-    en = sum(w in EN_SLOWA for w in slowa)
-    if pl > en * 1.2 and pl >= 8:
-        return "pl"
-    if en > pl * 1.2 and en >= 8:
-        return "en"
+    wyniki = {
+        "pl": sum(w in PL_SLOWA for w in slowa) + 3 * sum(any(c in LITERY_PL for c in w) for w in slowa),
+        "en": sum(w in EN_SLOWA for w in slowa),
+    }
+    for jez, zbior in INNE_SLOWA.items():
+        wyniki[jez] = sum(w in zbior for w in slowa) + 3 * sum(any(c in LITERY_INNE for c in w) for w in slowa)
+    kolejnosc = sorted(wyniki.items(), key=lambda x: -x[1])
+    (najl, w1), (_, w2) = kolejnosc[0], kolejnosc[1]
+    if najl in ("pl", "en") and w1 >= 8 and w1 > w2 * 1.2:
+        return najl
     return "inny"
 
 
