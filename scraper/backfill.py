@@ -100,7 +100,10 @@ def main(argv: list[str] | None = None) -> int:
                 paczka.append({"slug": s, "stan": st, "wiersze": wiersze})
                 emisji += len(wiersze)
         if paczka:
-            mag.zapisz_paczke(paczka)
+            try:
+                mag.zapisz_paczke(paczka)
+            except Exception as e:  # nie zatrzymujemy pobierania: niezapisane doby pobierze kolejne uruchomienie
+                print(f"BŁĄD zapisu tygodnia {poczatek_tyg}–{koniec_tyg}: {e} – idę dalej", flush=True)
         if limit:
             raport(f"Limit czasu w tygodniu {poczatek_tyg}–{koniec_tyg} (zapisane: {len(paczka)} stacji) – wznów tym samym poleceniem")
             return 0

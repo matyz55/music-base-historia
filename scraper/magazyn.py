@@ -98,7 +98,8 @@ class MagazynDysk:
                 if not wynik.get("ok"):
                     blad = str(wynik.get("blad"))
                     # blokada zajęta (np. trwa przeliczanie podsumowań) – ponawiamy
-                    if "lock" in blad.lower() or "timeout" in blad.lower() or "blokad" in blad.lower():
+                    # przejściowe: blokada zajęta (trwa przeliczanie), ucięta treść żądania, przeciążenie usług Google
+                    if any(x in blad.lower() for x in ("lock", "timeout", "blokad", "unexpected end of json", "service", "exceeded", "przekroczono")):
                         ostatni = blad
                         import time
                         time.sleep(30)
@@ -125,15 +126,15 @@ class MagazynDysk:
         gz = base64.b64encode(gzip.compress(_linie(wiersze).encode("utf-8"))).decode("ascii")
         self.wyslij("zapiszMiesiac", slug=slug, miesiac=miesiac, gz=gz, stan=stan)
 
-    def zapisz_paczke(self, wpisy: list[dict], max_bajtow: int = 4_000_000) -> None:
-        """wpisy: [{"slug", "stan", "wiersze"}] – wysyłane w częściach do ok. 4 MB (gzip w base64)."""
+    def zapisz_paczke(self, wpisy: list[dict], max_bajtow: int = 1_500_000) -> None:
+        """wpisy: [{"slug", "stan", "wiersze"}] – wysyłane w częściach do ok. 1,5 MB i 10 stacji (gzip w base64)."""
         czesc, rozmiar = [], 0
         for w in wpisy:
             miesiace = {m: base64.b64encode(gzip.compress(_linie(x).encode("utf-8"))).decode("ascii")
                         for m, x in _po_miesiacach(w["wiersze"]).items()}
             wpis = {"slug": w["slug"], "stan": w["stan"], "miesiace": miesiace}
             n = sum(len(v) for v in miesiace.values()) + 2000
-            if czesc and (rozmiar + n > max_bajtow or len(czesc) >= 20):
+            if czesc and (rozmiar + n > max_bajtow or len(czesc) >= 10):
                 self.wyslij("zapiszPaczke", wpisy=czesc)
                 czesc, rozmiar = [], 0
             czesc.append(wpis)
