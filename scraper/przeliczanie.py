@@ -29,7 +29,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Diagnostyka: sprawdzono {d.get('sprawdzone')} plików, problemy: {d.get('problemy') or 'brak'}", flush=True)
     except BladOdbiornika as e:
         print(f"Diagnostyka niedostępna: {e}", flush=True)
+    zostalo = False
     for akcja in ("przeliczZalegle", "przeliczZbiorcze"):
+        w = {"pozostalo": 1}
         while time.monotonic() < koniec:
             t0 = time.monotonic()
             try:
@@ -46,6 +48,9 @@ def main(argv: list[str] | None = None) -> int:
             # przerwa: Odbiornik ma jedną blokadę, a ta nie ustawia czekających w kolejce – bez przerwy
             # pobieranie historii i aktualizacja bieżąca czekałyby na swoją kolej w nieskończoność
             time.sleep(20)
+        zostalo = zostalo or bool(w.get("pozostalo"))
+    # znacznik dla workflow: zostało coś do przeliczenia → od razu następne zadanie (harmonogram GitHuba bywa opóźniony o godziny)
+    print("ZOSTALA_PRACA" if zostalo else "PRZELICZANIE_GOTOWE", flush=True)
     return 0
 
 

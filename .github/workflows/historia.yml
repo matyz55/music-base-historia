@@ -8,6 +8,9 @@ on:
   schedule:
     - cron: "7 * * * *"
   workflow_dispatch:
+permissions:
+  contents: read
+  actions: write   # tylko do uruchomienia następnego zadania (workflow_dispatch)
 concurrency:
   group: historia
   cancel-in-progress: false
@@ -26,4 +29,16 @@ jobs:
             echo "Brak sekretów ODBIORNIK_URL / ODBIORNIK_TOKEN – pomijam."
             exit 0
           fi
-          python3 -m scraper.backfill --magazyn dysk --max-minuty 330
+          python3 -m scraper.backfill --magazyn dysk --max-minuty 330 | tee wynik.txt
+      # Harmonogram GitHuba potrafi pominąć uruchomienia na kilka godzin (11.11.2026: 1–2 z ~12), więc
+      # gdy praca nie jest skończona, zadanie od razu zleca następne. Repozytorium publiczne – minuty bez opłat.
+      - name: Następne zadanie od razu, jeśli zostało coś do zrobienia
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f wynik.txt ] && grep -q "Limit czasu" wynik.txt; then
+            gh workflow run historia.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" && echo "Zlecono kolejne zadanie."
+          else
+            echo "Nic nie zostało – kolejne zadanie tylko z harmonogramu."
+          fi

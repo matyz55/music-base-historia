@@ -119,6 +119,8 @@ def historia_357(mag, p: Pobieracz, od: dt.date, max_minuty: float) -> None:
         if puste_z_rzedu >= 45:   # półtora miesiąca bez playlisty – początek historii stacji
             print("radio_357: 45 pustych dób z rzędu – koniec historii", flush=True)
             break
+    # znacznik dla workflow: bez niego zadanie od razu uruchamia następne
+    print("HISTORIA_KOMPLETNA" if (d < od or puste_z_rzedu >= 45) else "ZOSTALA_PRACA", flush=True)
 
 
 def main(argv: list[str] | None = None) -> int:
