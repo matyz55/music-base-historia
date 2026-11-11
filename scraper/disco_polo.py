@@ -190,6 +190,9 @@ def gatunki_pass(mag, koniec: float, limit: int = 5000) -> None:
     except Exception as e:  # stara wersja Odbiornika – pominięcie do aktualizacji
         print(f"Disco polo: pomijam ({e})")
         return
+    if braki and len(braki[0]) < 5:   # stary Odbiornik nie zna trybu „gatunek” (zwraca listę bez gatunków)
+        print("Disco polo: Odbiornik bez trybu „gatunek” – pomijam do aktualizacji OdbiornikAgregaty.gs")
+        return
     if not braki:
         print("Disco polo: wszystkie utwory sprawdzone")
         return
