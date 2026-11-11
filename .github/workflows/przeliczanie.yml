@@ -1,0 +1,25 @@
+# Podsumowania na Dysku (lata, całe radio, indeks utworów) i metadane utworów (Songster, MusicBrainz)
+# w trakcie pobierania historii. Repozytorium publiczne – minuty GitHub Actions bez opłat.
+# Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: Przeliczanie i metadane
+on:
+  schedule:
+    - cron: "37 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: przeliczanie
+  cancel-in-progress: false
+jobs:
+  przeliczanie:
+    runs-on: ubuntu-latest
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@v4
+      - name: Przelicz podsumowania i uzupełnij metadane
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m scraper.przeliczanie --max-minuty 40
+          python3 -m scraper.metadane --max-minuty 15

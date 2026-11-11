@@ -93,10 +93,17 @@ class MagazynDysk:
         for _ in range(4):
             try:
                 # Apps Script odpowiada przekierowaniem 302; urllib przechodzi pod nowy adres metodą GET – tak ma być
-                with urllib.request.urlopen(req, timeout=300) as odp:
+                with urllib.request.urlopen(req, timeout=420) as odp:
                     wynik = json.loads(odp.read().decode("utf-8"))
                 if not wynik.get("ok"):
-                    raise BladOdbiornika(f"{akcja}: {wynik.get('blad')}")
+                    blad = str(wynik.get("blad"))
+                    # blokada zajęta (np. trwa przeliczanie podsumowań) – ponawiamy
+                    if "lock" in blad.lower() or "timeout" in blad.lower() or "blokad" in blad.lower():
+                        ostatni = blad
+                        import time
+                        time.sleep(30)
+                        continue
+                    raise BladOdbiornika(f"{akcja}: {blad}")
                 return wynik
             except (OSError, json.JSONDecodeError) as e:  # sieć, przeciążenie, strona błędu zamiast JSON
                 ostatni = e
