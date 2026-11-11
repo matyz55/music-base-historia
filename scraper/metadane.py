@@ -6,6 +6,8 @@
 2. MusicBrainz – najwcześniejsza „first-release-date” nagrań tego wykonawcy o tym tytule (wynik ≥ 90)
    i kraj wykonawcy; najwyżej 1 zapytanie na sekundę (zasada MusicBrainz).
 Utwory bez wyniku są oznaczane próbą i sprawdzane ponownie najwcześniej po 30 dniach.
+3. Język tekstu (j: pl / en / inny / instr) z tekstu w lrclib.net – do kwoty polskiej i profilu utworu;
+   najwyżej 1 zapytanie na sekundę, utwory bez tekstu oznaczane próbą (jp).
 
   python3 -m scraper.metadane --max-minuty 10
 """
@@ -87,12 +89,66 @@ class MusicBrainz:
         return wynik
 
 
+PL_SLOWA = set("i w się nie na że to jak ja ty mi mnie cię ci jest być tak już czy co ale bo gdy kiedy jeszcze tylko my nas nam wy was tu tam ten ta te mój moja twój twoja jestem będzie był była chcę".split())
+EN_SLOWA = set("the you and i me my to is it in that of on your for love be all we don't i'm can just know so oh baby what when like now never".split())
+
+
+def jezyk_tekstu(tekst: str) -> str:
+    """Prosta ocena języka: słowa funkcyjne + polskie litery. Zwraca pl, en albo inny."""
+    slowa = re.findall(r"[a-ząćęłńóśźż']+", tekst.lower())
+    if len(slowa) < 15:
+        return ""
+    pl = sum(w in PL_SLOWA for w in slowa) + 3 * sum(any(c in w for c in "ąćęłńśźż") for w in slowa)
+    en = sum(w in EN_SLOWA for w in slowa)
+    if pl > en * 1.2 and pl >= 8:
+        return "pl"
+    if en > pl * 1.2 and en >= 8:
+        return "en"
+    return "inny"
+
+
+def jezyki(mag: MagazynDysk, koniec: float) -> None:
+    braki = mag.wyslij("kluczeBezMetadanych", limit=3000, tryb="jezyk")["klucze"]
+    print(f"Bez języka tekstu: {len(braki)}")
+    wynik, ostatnie, liczniki = {}, 0.0, {}
+    for k, a, t, _n in braki:
+        if time.monotonic() > koniec:
+            break
+        czekaj = ostatnie + 1.0 - time.monotonic()
+        if czekaj > 0:
+            time.sleep(czekaj)
+        ostatnie = time.monotonic()
+        glowny = re.split(r"\s*(?:/|&|,| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0]
+        tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
+        url = "https://lrclib.net/api/get?" + urllib.parse.urlencode({"artist_name": glowny, "track_name": tyt})
+        try:
+            with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=20) as odp:
+                d = json.load(odp)
+        except urllib.error.HTTPError as e:
+            d = {} if e.code == 404 else None
+        except Exception:
+            d = None
+        if d is None:
+            continue  # błąd sieci – następnym razem
+        j = "instr" if d.get("instrumental") else jezyk_tekstu(d.get("plainLyrics") or "")
+        wynik[k] = {"j": j} if j else {"jp": int(time.time() * 1000)}
+        liczniki[j or "brak"] = liczniki.get(j or "brak", 0) + 1
+        if len(wynik) >= 100:
+            mag.wyslij("zapiszMetadane", metadane=dict(wynik))
+            wynik.clear()
+    if wynik:
+        mag.wyslij("zapiszMetadane", metadane=wynik)
+    print(f"Język tekstu: {liczniki}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-minuty", type=float, default=10)
     ap.add_argument("--limit", type=int, default=5000, help="ile utworów bez metadanych pobrać z Odbiornika")
+    ap.add_argument("--jezyk-minuty", type=float, default=None, help="ile minut na ustalanie języka tekstu (domyślnie połowa czasu)")
     a = ap.parse_args(argv)
-    koniec = time.monotonic() + a.max_minuty * 60
+    jez_min = a.max_minuty / 2 if a.jezyk_minuty is None else a.jezyk_minuty
+    koniec = time.monotonic() + (a.max_minuty - jez_min) * 60
     mag = MagazynDysk()
     try:
         braki = mag.wyslij("kluczeBezMetadanych", limit=a.limit)["klucze"]
@@ -103,6 +159,8 @@ def main(argv: list[str] | None = None) -> int:
         raise
     print(f"Bez metadanych: {len(braki)} (najczęściej grane najpierw)")
     if not braki:
+        if jez_min > 0:
+            jezyki(mag, time.monotonic() + jez_min * 60)
         return 0
     indeks = Indeks(wczytaj())
     sp = wczytaj_spotify_songstera()
@@ -143,6 +201,8 @@ def main(argv: list[str] | None = None) -> int:
             wyslij()
     wyslij()
     print(f"Songster: {z_songstera}, MusicBrainz: {z_mb}, bez wyniku: {bez}, niesprawdzone (limit czasu): {len(reszta) - z_mb - bez}")
+    if jez_min > 0:
+        jezyki(mag, time.monotonic() + jez_min * 60)
     return 0
 
 

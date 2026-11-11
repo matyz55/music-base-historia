@@ -35,9 +35,17 @@ def wykonawca(a: str) -> str:
     return a.strip()
 
 
+# przedrostki nazw stacji w metadanych strumienia (np. Muzo FM: „Eska Rock: Kult – Baranek”)
+_PRZEDROSTKI_STACJI = re.compile(r"^\s*(?:eska rock|radio eska rock)\s*:\s*", re.I)
+
+
+def oczysc_wykonawce(a: str) -> str:
+    return _PRZEDROSTKI_STACJI.sub("", a or "")
+
+
 def wykonawcy(a: str) -> list[str]:
     """Lista znormalizowanych wykonawców; pierwszy to wykonawca główny."""
-    czesci = [wykonawca(x) for x in _SEPARATORY.split(a)]
+    czesci = [wykonawca(x) for x in _SEPARATORY.split(oczysc_wykonawce(a))]
     return [c for c in czesci if c]
 
 

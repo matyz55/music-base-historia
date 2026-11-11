@@ -19,6 +19,7 @@ from .magazyn import BladOdbiornika, MagazynDysk
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--max-minuty", type=float, default=30)
+    ap.add_argument("--natychmiast", action="store_true", help="bez czekania 90 min na „dojrzałość” miesięcy (testy)")
     a = ap.parse_args(argv)
     mag = MagazynDysk()
     koniec = time.monotonic() + a.max_minuty * 60
@@ -32,13 +33,14 @@ def main(argv: list[str] | None = None) -> int:
         while time.monotonic() < koniec:
             t0 = time.monotonic()
             try:
-                w = mag.wyslij(akcja)
+                w = mag.wyslij(akcja, natychmiast=a.natychmiast)
             except BladOdbiornika as e:
                 if "nieznana akcja" in str(e):
                     print("Odbiornik nie ma jeszcze tej funkcji (stara wersja wdrożenia) – pomijam do aktualizacji.")
                     return 0
                 raise
-            print(f"{akcja}: zrobione {w.get('zrobione')}, pozostało {w.get('pozostalo')} ({time.monotonic() - t0:.0f} s)", flush=True)
+            czeka = f", czeka na dojrzałość: {w['czeka']}" if w.get("czeka") else ""
+            print(f"{akcja}: zrobione {w.get('zrobione')}, pozostało {w.get('pozostalo')}{czeka} ({time.monotonic() - t0:.0f} s)", flush=True)
             if not w.get("pozostalo"):
                 break
             # przerwa: Odbiornik ma jedną blokadę, a ta nie ustawia czekających w kolejce – bez przerwy
