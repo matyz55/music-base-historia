@@ -22,6 +22,12 @@ def main(argv: list[str] | None = None) -> int:
     a = ap.parse_args(argv)
     mag = MagazynDysk()
     koniec = time.monotonic() + a.max_minuty * 60
+    # szybka diagnostyka plików .json na Dysku (stan stacji, indeks, pliki pomocnicze) – wynik w dzienniku
+    try:
+        d = mag.wyslij("diagnostyka")
+        print(f"Diagnostyka: sprawdzono {d.get('sprawdzone')} plików, problemy: {d.get('problemy') or 'brak'}", flush=True)
+    except BladOdbiornika as e:
+        print(f"Diagnostyka niedostępna: {e}", flush=True)
     for akcja in ("przeliczZalegle", "przeliczZbiorcze"):
         while time.monotonic() < koniec:
             t0 = time.monotonic()
