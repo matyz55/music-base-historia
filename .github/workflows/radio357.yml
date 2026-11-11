@@ -1,0 +1,24 @@
+# Historia playlist Radia 357 (spoza odSluchane.eu) – strony radio357.pl/twoje-357/playlista/dzien/RRRR-MM-DD/.
+# Wznawialne: pomija doby już zapisane na Dysku; kończy się samo po 45 pustych dobach z rzędu (początek stacji).
+# Sekrety repozytorium: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: Historia Radia 357
+on:
+  schedule:
+    - cron: "52 * * * *"
+  workflow_dispatch:
+concurrency:
+  group: radio357
+  cancel-in-progress: false
+jobs:
+  radio357:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pobierz historię Radia 357 (do 35 min)
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m scraper.inne_zrodla --historia 2020-12-01 --max-minuty 35

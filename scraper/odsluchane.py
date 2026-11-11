@@ -55,10 +55,14 @@ class Pobieracz:
         raise RuntimeError(f"Nie udało się pobrać {url} po {self.proby} próbach")
 
 
+# stacje, których nie zbieramy (decyzja użytkownika 11.11.2026: RMF Dance usunięte z bazy)
+WYKLUCZONE = {"rmf_dance"}
+
+
 def lista_stacji(p: Pobieracz) -> list[str]:
     s = p.pobierz(f"{BAZA}/radio")
     slugi = sorted(set(re.findall(r'href="https://www\.odsluchane\.eu/radio/([a-z0-9_]+)"', s)))
-    return [x for x in slugi if x != "index"]
+    return [x for x in slugi if x != "index" and x not in WYKLUCZONE]
 
 
 def id_stacji(p: Pobieracz, slug: str) -> tuple[int, str]:
