@@ -28,7 +28,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from .normalize import tytul, wykonawca, wykonawcy
+from .normalize import klucz, tytul, wykonawca, wykonawcy
 
 WERSJA = 1
 QID = "Q1185390"   # disco polo w Wikidata (etykieta pl „disco polo”, sprawdzone 11.11.2026)
@@ -36,6 +36,12 @@ UA = "MusicBaseScrapper/0.2 (prywatne archiwum playlist)"
 # Te same osoby pod innym imieniem, którego nie mają aliasy MusicBrainz ani Wikidata (sprawdzone 11.11.2026).
 # Zenon Martyniuk (Akcent) występuje w playlistach jako „Zenek Martyniuk” – pl.wikipedia.org/wiki/Zenon_Martyniuk.
 ALIASY = {"zenek martyniuk": "zenon martyniuk"}
+# Wykonawcy dance, których MusicBrainz ma oznaczonych jako disco polo – decyzja użytkownika 12.11.2026: nie oznaczamy.
+NIE_DISCO_POLO = {"stachursky", "d-bomb", "d bomb"}
+# Utwory oznaczone przed tą decyzją (dzienniki 12.11.2026) – dp: False przy każdym uruchomieniu (idempotentne).
+KOREKTY = [("Stachursky", "Czuje I Wiem"), ("Stachursky", "Taki Jestem"), ("Stachursky", "Gdy Zaplaczesz"),
+           ("Stachursky", "Z Każdym Twym Oddechem"), ("Stachursky", "Szampan I Truskawki"), ("Basta & Stachursky", "8 Sekund"),
+           ("D-Bomb", "Shake Your Boom Boom"), ("D-Bomb", "Mysle...")]
 WYKLUCZAJACE = {"rock", "metal", "hard rock", "heavy metal", "punk", "hip hop", "rap", "jazz", "blues", "classical",
                 "muzyka klasyczna", "reggae", "soul", "funk", "country", "indie", "alternative", "grunge"}
 
@@ -166,6 +172,8 @@ def klasyfikuj(z: Zrodla, a: str, t: str, gatunki: list[str] | None) -> str | No
     if gatunki and WYKLUCZAJACE & {g.lower() for g in gatunki}:
         return None
     wk, tk = wykonawcy(a), tytul(t)
+    if any(w in NIE_DISCO_POLO or wykonawca(w) in NIE_DISCO_POLO for w in wk):
+        return None
     for w in wk:
         if (w, tk) in z.utwory:
             return z.utwory[(w, tk)]
@@ -185,6 +193,10 @@ def klasyfikuj(z: Zrodla, a: str, t: str, gatunki: list[str] | None) -> str | No
 
 def gatunki_pass(mag, koniec: float, limit: int = 5000) -> None:
     """Sprawdza utwory bez bieżącej wersji sprawdzenia (gp < WERSJA) – najczęściej grane najpierw."""
+    try:
+        mag.wyslij("zapiszMetadane", metadane={klucz(a, t): {"dp": False} for a, t in KOREKTY})
+    except Exception as e:  # spróbujemy przy następnym uruchomieniu
+        print(f"Disco polo: korekty niezapisane ({e})")
     try:
         braki = mag.wyslij("kluczeBezMetadanych", tryb="gatunek", wersja=WERSJA, limit=limit)["klucze"]
     except Exception as e:  # stara wersja Odbiornika – pominięcie do aktualizacji
