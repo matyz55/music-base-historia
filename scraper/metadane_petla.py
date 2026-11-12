@@ -3,7 +3,7 @@
 Tryby (każdy w osobnym zadaniu, więc z innego adresu IP i bez wzajemnego czekania):
   mb      – rok, kraj, długość nagrania: Songster (lokalny indeks), potem MusicBrainz (1 zapytanie na 1,1 s,
             limit MusicBrainz: średnio 1 na sekundę z jednego adresu),
-  jezyk   – język tekstu z lrclib.net (1 zapytanie na sekundę),
+  jezyk   – język tekstu i wulgaryzmy z lrclib.net (1 zapytanie na sekundę),
   gatunek – disco polo (MusicBrainz tylko dla kandydatów, Wikidata gdy dostępna).
 
 Porcja za porcją (najczęściej grane najpierw), aż skończy się czas albo utwory. Gdy zostaje praca,
@@ -36,7 +36,10 @@ def main(argv: list[str] | None = None) -> int:
         if a.tryb == "mb":
             n = _metadane(SimpleNamespace(limit=a.porcja), 0, koniec)
         elif a.tryb == "jezyk":
-            n = jezyki(MagazynDysk(), koniec, limit=min(a.porcja, 3000))
+            # najpierw ocena wulgaryzmów dla utworów sprawdzonych wcześniej (mają język, nie mają pola w), potem nowe
+            n = jezyki(MagazynDysk(), koniec, limit=min(a.porcja, 3000), tryb="wulg")
+            if not n:
+                n = jezyki(MagazynDysk(), koniec, limit=min(a.porcja, 3000))
         else:
             n = gatunki_pass(MagazynDysk(), koniec, limit=a.porcja)
         if not n:   # nic do zrobienia (albo źródło chwilowo niedostępne) – koniec tego zadania

@@ -21,6 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 
+from .wulgaryzmy import poziom as poziom_wulgaryzmow
 from .magazyn import BladOdbiornika, MagazynDysk
 from .normalize import tytul, wykonawca, wykonawcy
 from .disco_polo import gatunki_pass
@@ -126,10 +127,16 @@ def jezyk_tekstu(tekst: str) -> str:
     return "inny"
 
 
-def jezyki(mag: MagazynDysk, koniec: float, limit: int = 3000) -> int:
-    """Język tekstu z lrclib.net (1 zapytanie/s); zwraca liczbę utworów do sprawdzenia w tej porcji (0 = koniec)."""
-    braki = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="jezyk")["klucze"]
-    print(f"Bez języka tekstu: {len(braki)}")
+def jezyki(mag: MagazynDysk, koniec: float, limit: int = 3000, tryb: str = "jezyk") -> int:
+    """Język tekstu i wulgaryzmy (pole w: 2/1/0, scraper/wulgaryzmy.py) z lrclib.net (1 zapytanie/s).
+    tryb „wulg”: utwory z językiem, ale jeszcze bez oceny wulgaryzmów (sprawdzone przed 12.11.2026).
+    Zwraca liczbę utworów w tej porcji (0 = nic do zrobienia)."""
+    odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb=tryb)
+    if tryb != "jezyk" and odp.get("tryb") != tryb:   # starszy Odbiornik nie zna trybu (zwróciłby inne utwory)
+        print(f"Odbiornik bez trybu „{tryb}” – pomijam do aktualizacji OdbiornikAgregaty.gs")
+        return 0
+    braki = odp["klucze"]
+    print(f"Bez {'języka tekstu' if tryb == 'jezyk' else 'oceny wulgaryzmów'}: {len(braki)}")
     wynik, ostatnie, liczniki = {}, 0.0, {}
     for k, a, t, _n in braki:
         if time.monotonic() > koniec:
@@ -150,8 +157,9 @@ def jezyki(mag: MagazynDysk, koniec: float, limit: int = 3000) -> int:
             d = None
         if d is None:
             continue  # błąd sieci – następnym razem
-        j = "instr" if d.get("instrumental") else jezyk_tekstu(d.get("plainLyrics") or "")
-        wynik[k] = {"j": j} if j else {"jp": int(time.time() * 1000)}
+        tekst = d.get("plainLyrics") or ""
+        j = "instr" if d.get("instrumental") else jezyk_tekstu(tekst)
+        wynik[k] = {"j": j, "w": 0 if j == "instr" else poziom_wulgaryzmow(tekst)} if j else {"jp": int(time.time() * 1000)}
         liczniki[j or "brak"] = liczniki.get(j or "brak", 0) + 1
         if len(wynik) >= 100:
             mag.wyslij("zapiszMetadane", metadane=dict(wynik))
