@@ -340,8 +340,9 @@ class Discogs:
         glowny = re.split(r"\s*(?:/|&|,| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0]
         tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
         wyn = self._get("/database/search", type="release", artist=glowny, track=tyt, per_page=8).get("results") or []
-        wk, tk = set(wykonawcy(a)), tytul(t)
-        for r in wyn[:5]:
+        wk, tk, pierwsze = set(wykonawcy(a)), tytul(t), None
+        for i, r in enumerate(wyn[:5]):
+            dalej = i < min(len(wyn), 5) - 1   # szukamy dalej wydawnictwa z twórcami, ale pamiętamy pierwsze pasujące
             rel = self._get(f"/releases/{r['id']}")
             if not any(wykonawca(self._nazwa(x)) in wk for x in rel.get("artists") or []):
                 continue
@@ -359,11 +360,12 @@ class Discogs:
                 for pole in self._role(x.get("role", "")):
                     if self._nazwa(x) not in w.setdefault(pole, []):
                         w[pole].append(self._nazwa(x))
-            if w.get("kp") or w.get("as") or w.get("au"):
-                w["dg"] = rel.get("id")
-                w["dlab"] = [x.get("name") for x in rel.get("labels") or [] if x.get("name")][:2]
+            w["dg"] = rel.get("id")   # wydawnictwo z tym utworem – panel pokazuje z niego format, firmy, statystyki
+            w["dlab"] = [x.get("name") for x in rel.get("labels") or [] if x.get("name")][:2]
+            if w.get("kp") or w.get("as") or w.get("au") or not dalej:
                 return {k: v for k, v in w.items() if v}
-        return {}
+            pierwsze = pierwsze or {k: v for k, v in w.items() if v}
+        return pierwsze or {}
 
 
 class Wikidata:
@@ -446,39 +448,47 @@ class Wikidata:
 def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisji: int = 20) -> int:
     """Szczegóły z MusicBrainz (kompozytor, autor słów, wydanie) dla utworów z ≥ min_emisji, najczęściej grane najpierw."""
     import os
-    wersja = 2 if os.environ.get("DISCOGS_TOKEN") else 1   # v2: z Discogs – utwory bez twórców sprawdzone v1 idą jeszcze raz
+    wersja = 3 if os.environ.get("DISCOGS_TOKEN") else 1   # v3: Discogs dla każdego utworu (bez ponownego MusicBrainz, gdy już był)
     odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="szczegoly", min=min_emisji, wersja=wersja)
     if odp.get("tryb") != "szczegoly":
         print("Odbiornik bez trybu „szczegoly” – pomijam do aktualizacji OdbiornikAgregaty.gs")
         return 0
     braki = odp["klucze"]
-    print(f"Bez szczegółów (≥ {min_emisji} emisji): {len(braki)}", flush=True)
+    print(f"Bez szczegółów (≥ {min_emisji} emisji, wersja {wersja}): {len(braki)}", flush=True)
     mb, wd, dg, wynik, z_kompozytorem, z_wikidata, sprawdzone = MusicBrainz(), Wikidata(), Discogs(os.environ.get("DISCOGS_TOKEN")), {}, 0, 0, 0
     z_discogs = 0
     print(f"Discogs: {'token jest' if dg.token else 'brak tokenu DISCOGS_TOKEN – pomijam to źródło'}", flush=True)
-    for k, a, t, _n in braki:
+    for wiersz in braki:
+        k, a, t = wiersz[0], wiersz[1], wiersz[2]
+        bylo = (wiersz[4] if len(wiersz) > 4 else None) or {}
         if time.monotonic() > koniec:
             break
         try:
-            w = mb.szczegoly(a, t)
+            # MusicBrainz tylko, gdy jeszcze go nie pytaliśmy (przy przejściu na v3 – same Discogs)
+            w = {"sz": int(time.time() * 1000)} if bylo else mb.szczegoly(a, t)
         except Exception as e:  # sieć – spróbujemy następnym razem
             print(f"Szczegóły: {a} – {t}: {e}", file=sys.stderr)
             continue
-        if not (w.get("kp") or w.get("as") or w.get("au")) and dg.token:
-            # MusicBrainz bez twórców – Discogs (credits wydawnictw, dobre pokrycie polskich wydań)
+        ma = {x: bool(w.get(x)) or bool(bylo.get(x)) for x in ("kp", "as", "au", "pr")}
+        zts = {}
+        if dg.token:
             try:
                 d = dg.tworcy(a, t)
             except Exception as e:
                 d = {}
                 print(f"Discogs: {a} – {t}: {e}", file=sys.stderr)
-            if d:
+            if d.get("dg"):
+                w["dg"] = d["dg"]
+            # twórcy z Discogs uzupełniają tylko role, których brakuje (MusicBrainz ma pierwszeństwo)
+            for x in ("kp", "as", "au", "ar", "pr"):
+                if d.get(x) and not ma.get(x) and not w.get(x):
+                    w[x] = d[x]
+                    zts[x] = "Discogs"
+            if any(x in zts for x in ("kp", "as", "au")):
                 z_discogs += 1
-                w.update({"zt": "Discogs", "dg": d["dg"], **{x: d[x] for x in ("kp", "as", "au", "ar") if d.get(x)}})
-                if d.get("pr") and not w.get("pr"):
-                    w["pr"] = d["pr"]
-                if d.get("dlab") and not (w.get("wy") or {}).get("lab"):
-                    w["wlab"] = d["dlab"]
-        if not (w.get("kp") or w.get("as") or w.get("au")):
+            if d.get("dlab") and not (w.get("wy") or {}).get("lab"):
+                w["wlab"] = d["dlab"]
+        if not (w.get("kp") or w.get("as") or w.get("au") or ma["kp"] or ma["as"] or ma["au"]):
             # dalej bez twórców – Wikidata (osobny serwis, własny limit)
             try:
                 d = wd.tworcy(a, t)
@@ -487,17 +497,23 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
                 print(f"Wikidata: {a} – {t}: {e}", file=sys.stderr)
             if d.get("kp") or d.get("as"):
                 z_wikidata += 1
-                w.update({"zt": "Wikidata", "kp": d.get("kp", []), "as": d.get("as", []), "wd": d["wd"]})
-                if d.get("pr") and not w.get("pr"):
+                for x in ("kp", "as"):
+                    if d.get(x):
+                        w[x] = d[x]
+                        zts[x] = "Wikidata"
+                if d.get("pr") and not w.get("pr") and not ma["pr"]:
                     w["pr"] = d["pr"]
+                    zts["pr"] = "Wikidata"
                 if d.get("lab") and not (w.get("wy") or {}).get("lab"):
                     w["wlab"] = d["lab"]
-            elif d.get("wd"):
+            if d.get("wd"):
                 w["wd"] = d["wd"]
+        if zts:
+            w["zts"] = zts
         w["szv"] = wersja
         wynik[k] = {x: v for x, v in w.items() if v not in ([], None, "")}
         sprawdzone += 1
-        z_kompozytorem += bool(w.get("kp") or w.get("au") or w.get("as"))
+        z_kompozytorem += bool(w.get("kp") or w.get("au") or w.get("as") or ma["kp"] or ma["as"] or ma["au"])
         if len(wynik) >= 100:
             mag.wyslij("zapiszMetadane", metadane=dict(wynik))
             wynik.clear()
