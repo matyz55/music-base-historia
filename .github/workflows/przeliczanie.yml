@@ -15,7 +15,7 @@ concurrency:
 jobs:
   przeliczanie:
     runs-on: ubuntu-latest
-    timeout-minutes: 70
+    timeout-minutes: 100   # 40 min przeliczania + 15 min metadanych + 25 min przerwy przed kolejnym zleceniem
     steps:
       - uses: actions/checkout@v4
       - name: Przelicz podsumowania i uzupełnij metadane
@@ -35,6 +35,12 @@ jobs:
         run: |
           if [ -f wynik.txt ] && grep -q "ZOSTALA_PRACA" wynik.txt; then
             gh workflow run przeliczanie.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" && echo "Zlecono kolejne zadanie."
+          elif [ -f wynik.txt ] && grep -q -E "czeka na dojrzałość: [1-9]" wynik.txt; then
+            # zmiany czekają 90 min na „dojrzałość”; harmonogram potrafi nie ruszyć przez kilka godzin (12.11.2026:
+            # brak uruchomień 2:32–6:31 UTC), więc po 25 min przerwy zadanie zleca następne. Minuty repozytorium
+            # publicznego są bez opłat; przeliczanie przetwarza też kolejkę zapisów bieżących Odbiornika.
+            sleep 1500
+            gh workflow run przeliczanie.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" && echo "Zlecono kolejne zadanie (po przerwie)."
           else
             echo "Nic nie zostało – kolejne zadanie tylko z harmonogramu."
           fi
