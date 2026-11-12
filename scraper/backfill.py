@@ -83,13 +83,19 @@ def main(argv: list[str] | None = None) -> int:
                 if time.monotonic() > koniec:
                     limit = True
                     break
-                if (s, km) not in ma_dane:
-                    ma_dane[(s, km)] = miesiac_ma_dane(p, st["r"], d.year, d.month, wczoraj)
-                    if not ma_dane[(s, km)]:
-                        st["miesiace_puste"].append(km)
-                        zmiana = True
-                        continue
-                w = doba(p, st["r"], d)
+                # pojedyncze nieudane zapytanie (12.11.2026: szukaj.php 4× bez odpowiedzi) nie przerywa całego
+                # pobierania – ta doba zostaje niepobrana i weźmie ją kolejne uruchomienie (sprawdza wszystkie luki)
+                try:
+                    if (s, km) not in ma_dane:
+                        ma_dane[(s, km)] = miesiac_ma_dane(p, st["r"], d.year, d.month, wczoraj)
+                        if not ma_dane[(s, km)]:
+                            st["miesiace_puste"].append(km)
+                            zmiana = True
+                            continue
+                    w = doba(p, st["r"], d)
+                except RuntimeError as e:
+                    print(f"Pominięto {s} {d}: {e}", flush=True)
+                    continue
                 wiersze.extend({"d": d.isoformat(), **x} for x in w)
                 dni_ok[d.isoformat()] = len(w)
                 dob += 1
