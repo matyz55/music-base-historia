@@ -32,6 +32,7 @@ jobs:
         env:
           ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
           ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+          DISCOGS_TOKEN: ${{ secrets.DISCOGS_TOKEN }}   # opcjonalny – twórcy z Discogs (tryb szczegoly)
         run: |
           if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
           python3 -m scraper.metadane_petla --tryb ${{ matrix.tryb }} --max-minuty 300 | tee wynik.txt

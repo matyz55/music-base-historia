@@ -290,6 +290,82 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
+class Discogs:
+    """Twórcy z Discogs (api.discogs.com; token osobisty w zmiennej DISCOGS_TOKEN – sekret GitHuba, nigdy w kodzie).
+    Wyszukiwarka /database/search (type=release, artist, track), potem /releases/{id}: role z extraartists
+    utworu i wydawnictwa (pole tracks ogranicza rolę do wskazanych pozycji). Limit z tokenem: 60 zapytań/min → odstęp 1,1 s.
+    Format jak w bibliotece joalla/discogs_client (token jako parametr zapytania)."""
+    API = "https://api.discogs.com"
+    ROLE = {"kp": ("music by", "composed by", "composer"), "as": ("lyrics by", "words by", "text by", "lyricist"),
+            "au": ("written-by", "written by", "songwriter"), "ar": ("arranged by",), "pr": ("producer",)}
+
+    def __init__(self, token: str | None):
+        self.token = token
+        self._ostatnie = 0.0
+
+    def _get(self, sciezka: str, **par) -> dict:
+        czekaj = self._ostatnie + 1.1 - time.monotonic()
+        if czekaj > 0:
+            time.sleep(czekaj)
+        self._ostatnie = time.monotonic()
+        url = self.API + sciezka + "?" + urllib.parse.urlencode({**par, "token": self.token})
+        for proba in range(3):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as odp:
+                    return json.load(odp)
+            except urllib.error.HTTPError as e:   # komunikat bez adresu – token nie trafia do dziennika
+                if e.code in (429, 503):
+                    time.sleep(20 * (proba + 1))
+                    continue
+                raise RuntimeError(f"Discogs HTTP {e.code}") from None
+        return {}
+
+    @staticmethod
+    def _nazwa(x: dict) -> str:
+        return re.sub(r"\s*\(\d+\)$", "", x.get("name") or "").strip()   # „Jan Kowalski (2)” – numer rozróżniający w Discogs
+
+    def _role(self, rola: str) -> list[str]:
+        """„Music By, Lyrics By [Polish]” → ["kp", "as"] (jedna osoba może mieć kilka ról po przecinku)."""
+        wynik = []
+        for r in re.sub(r"\s*\[.*?\]", "", rola or "").lower().split(","):
+            r = r.strip()
+            for pole, wzorce in self.ROLE.items():
+                if r in wzorce and pole not in wynik:
+                    wynik.append(pole)
+        return wynik
+
+    def tworcy(self, a: str, t: str) -> dict:
+        if not self.token:
+            return {}
+        glowny = re.split(r"\s*(?:/|&|,| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0]
+        tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
+        wyn = self._get("/database/search", type="release", artist=glowny, track=tyt, per_page=8).get("results") or []
+        wk, tk = set(wykonawcy(a)), tytul(t)
+        for r in wyn[:5]:
+            rel = self._get(f"/releases/{r['id']}")
+            if not any(wykonawca(self._nazwa(x)) in wk for x in rel.get("artists") or []):
+                continue
+            utw = next((x for x in rel.get("tracklist") or [] if x.get("type_", "track") == "track" and tytul(x.get("title", "")) == tk), None)
+            if not utw:
+                continue
+            poz = (utw.get("position") or "").strip()
+            role = list(utw.get("extraartists") or [])
+            for x in rel.get("extraartists") or []:
+                tr = (x.get("tracks") or "").strip()
+                if not tr or (poz and poz in [y.strip() for y in re.split(r",|\bto\b", tr)]):
+                    role.append(x)
+            w: dict = {}
+            for x in role:
+                for pole in self._role(x.get("role", "")):
+                    if self._nazwa(x) not in w.setdefault(pole, []):
+                        w[pole].append(self._nazwa(x))
+            if w.get("kp") or w.get("as") or w.get("au"):
+                w["dg"] = rel.get("id")
+                w["dlab"] = [x.get("name") for x in rel.get("labels") or [] if x.get("name")][:2]
+                return {k: v for k, v in w.items() if v}
+        return {}
+
+
 class Wikidata:
     """Twórcy z Wikidata (Action API: wbsearchentities + wbgetentities, nie WDQS): kompozytor P86, autor tekstu P676,
     producent P162, wytwórnia P264, data publikacji P577. Utwór musi być piosenką/singlem/utworem muzycznym (P31)
@@ -369,13 +445,17 @@ class Wikidata:
 
 def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisji: int = 20) -> int:
     """Szczegóły z MusicBrainz (kompozytor, autor słów, wydanie) dla utworów z ≥ min_emisji, najczęściej grane najpierw."""
-    odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="szczegoly", min=min_emisji)
+    import os
+    wersja = 2 if os.environ.get("DISCOGS_TOKEN") else 1   # v2: z Discogs – utwory bez twórców sprawdzone v1 idą jeszcze raz
+    odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="szczegoly", min=min_emisji, wersja=wersja)
     if odp.get("tryb") != "szczegoly":
         print("Odbiornik bez trybu „szczegoly” – pomijam do aktualizacji OdbiornikAgregaty.gs")
         return 0
     braki = odp["klucze"]
     print(f"Bez szczegółów (≥ {min_emisji} emisji): {len(braki)}", flush=True)
-    mb, wd, wynik, z_kompozytorem, z_wikidata, sprawdzone = MusicBrainz(), Wikidata(), {}, 0, 0, 0
+    mb, wd, dg, wynik, z_kompozytorem, z_wikidata, sprawdzone = MusicBrainz(), Wikidata(), Discogs(os.environ.get("DISCOGS_TOKEN")), {}, 0, 0, 0
+    z_discogs = 0
+    print(f"Discogs: {'token jest' if dg.token else 'brak tokenu DISCOGS_TOKEN – pomijam to źródło'}", flush=True)
     for k, a, t, _n in braki:
         if time.monotonic() > koniec:
             break
@@ -384,8 +464,22 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
         except Exception as e:  # sieć – spróbujemy następnym razem
             print(f"Szczegóły: {a} – {t}: {e}", file=sys.stderr)
             continue
+        if not (w.get("kp") or w.get("as") or w.get("au")) and dg.token:
+            # MusicBrainz bez twórców – Discogs (credits wydawnictw, dobre pokrycie polskich wydań)
+            try:
+                d = dg.tworcy(a, t)
+            except Exception as e:
+                d = {}
+                print(f"Discogs: {a} – {t}: {e}", file=sys.stderr)
+            if d:
+                z_discogs += 1
+                w.update({"zt": "Discogs", "dg": d["dg"], **{x: d[x] for x in ("kp", "as", "au", "ar") if d.get(x)}})
+                if d.get("pr") and not w.get("pr"):
+                    w["pr"] = d["pr"]
+                if d.get("dlab") and not (w.get("wy") or {}).get("lab"):
+                    w["wlab"] = d["dlab"]
         if not (w.get("kp") or w.get("as") or w.get("au")):
-            # MusicBrainz bez twórców – Wikidata (osobny serwis, własny limit)
+            # dalej bez twórców – Wikidata (osobny serwis, własny limit)
             try:
                 d = wd.tworcy(a, t)
             except Exception as e:
@@ -400,6 +494,7 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
                     w["wlab"] = d["lab"]
             elif d.get("wd"):
                 w["wd"] = d["wd"]
+        w["szv"] = wersja
         wynik[k] = {x: v for x, v in w.items() if v not in ([], None, "")}
         sprawdzone += 1
         z_kompozytorem += bool(w.get("kp") or w.get("au") or w.get("as"))
@@ -408,5 +503,5 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
             wynik.clear()
     if wynik:
         mag.wyslij("zapiszMetadane", metadane=wynik)
-    print(f"Szczegóły: sprawdzono {sprawdzone}, z kompozytorem/autorem {z_kompozytorem} (w tym z Wikidata {z_wikidata})", flush=True)
+    print(f"Szczegóły: sprawdzono {sprawdzone}, z kompozytorem/autorem {z_kompozytorem} (w tym z Discogs {z_discogs}, z Wikidata {z_wikidata})", flush=True)
     return len(braki)
