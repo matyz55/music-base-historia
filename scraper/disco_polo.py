@@ -212,8 +212,8 @@ def gatunki_pass(mag, koniec: float, limit: int = 5000) -> int:
     try:
         z.wczytaj()
     except Exception as e:   # MusicBrainz przeciążony – spróbujemy przy następnym uruchomieniu
-        print(f"Disco polo: źródła niedostępne ({e}) – pomijam w tym uruchomieniu")
-        return 0
+        print(f"Disco polo: źródła niedostępne ({e}) – spróbuję za kilka minut")
+        return -1
     print(f"Disco polo: źródła – wykonawców (nazw) {len(z.nazwy)}, identyfikatorów MusicBrainz {len(z.mbid)}, utworów z Wikidata {len(z.utwory)}; do sprawdzenia {len(braki)}", flush=True)
     wynik, oznaczone, sprawdzone = {}, [], 0
     for wiersz in braki:

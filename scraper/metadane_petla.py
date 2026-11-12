@@ -45,7 +45,12 @@ def main(argv: list[str] | None = None) -> int:
             n = szczegoly_pass(MagazynDysk(), koniec, limit=min(a.porcja, 2000))
         else:
             n = gatunki_pass(MagazynDysk(), koniec, limit=a.porcja)
-        if not n:   # nic do zrobienia (albo źródło chwilowo niedostępne) – koniec tego zadania
+        if n is not None and n < 0:   # źródło chwilowo niedostępne (np. MusicBrainz 503) – przerwa i ponowna próba
+            if time.monotonic() + 360 > koniec:
+                break
+            time.sleep(300)
+            continue
+        if not n:   # nic do zrobienia – koniec tego zadania
             zostalo = False
             break
     print(f"Tryb {a.tryb}: porcji {porcji}", flush=True)

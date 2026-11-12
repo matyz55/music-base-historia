@@ -290,6 +290,83 @@ if __name__ == "__main__":
     sys.exit(main())
 
 
+class Wikidata:
+    """Twórcy z Wikidata (Action API: wbsearchentities + wbgetentities, nie WDQS): kompozytor P86, autor tekstu P676,
+    producent P162, wytwórnia P264, data publikacji P577. Utwór musi być piosenką/singlem/utworem muzycznym (P31)
+    z wykonawcą (P175) o tej samej nazwie co w playliście. Odstęp 1 s między zapytaniami."""
+    API = "https://www.wikidata.org/w/api.php"
+    TYPY = {"Q7366", "Q134556", "Q105543609", "Q2188189", "Q55850593"}   # piosenka, singel, utwór muzyczny, dzieło muzyczne, nagranie
+
+    def __init__(self):
+        self._ostatnie = 0.0
+
+    def _get(self, **par) -> dict:
+        czekaj = self._ostatnie + 1.0 - time.monotonic()
+        if czekaj > 0:
+            time.sleep(czekaj)
+        self._ostatnie = time.monotonic()
+        url = self.API + "?" + urllib.parse.urlencode({"format": "json", **par})
+        for proba in range(3):
+            try:
+                with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": UA}), timeout=30) as odp:
+                    return json.load(odp)
+            except urllib.error.HTTPError as e:
+                if e.code in (429, 503):
+                    time.sleep(10 * (proba + 1))
+                    continue
+                raise
+        return {}
+
+    @staticmethod
+    def _wartosci(enc: dict, p: str) -> list:
+        w = []
+        for c in (enc.get("claims") or {}).get(p, []):
+            v = ((c.get("mainsnak") or {}).get("datavalue") or {}).get("value")
+            if isinstance(v, dict) and v.get("id"):
+                w.append(v["id"])
+            elif isinstance(v, dict) and v.get("time"):
+                w.append(v["time"])
+        return w
+
+    def _etykiety(self, ids: list[str]) -> dict[str, str]:
+        wynik = {}
+        for i in range(0, len(ids), 50):
+            d = self._get(action="wbgetentities", ids="|".join(ids[i:i + 50]), props="labels", languages="pl|en")
+            for q, e in (d.get("entities") or {}).items():
+                lab = e.get("labels") or {}
+                wynik[q] = (lab.get("pl") or lab.get("en") or {}).get("value", q)
+        return wynik
+
+    def tworcy(self, a: str, t: str) -> dict:
+        tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
+        ids = []
+        for jez in ("pl", "en"):
+            d = self._get(action="wbsearchentities", search=tyt, language=jez, type="item", limit=10)
+            ids += [x["id"] for x in d.get("search") or [] if x["id"] not in ids]
+        if not ids:
+            return {}
+        enc = (self._get(action="wbgetentities", ids="|".join(ids[:20]), props="claims|labels", languages="pl|en").get("entities") or {})
+        kand = {q: e for q, e in enc.items() if self.TYPY & set(self._wartosci(e, "P31")) and tytul(((e.get("labels") or {}).get("pl") or (e.get("labels") or {}).get("en") or {}).get("value", "")) == tytul(t)}
+        if not kand:
+            return {}
+        wyk = {q for e in kand.values() for q in self._wartosci(e, "P175")}
+        nazwy = self._etykiety(sorted(wyk)) if wyk else {}
+        wk = set(wykonawcy(a))
+        for q, e in kand.items():
+            if not any(wykonawca(nazwy.get(x, "")) in wk for x in self._wartosci(e, "P175")):
+                continue
+            pola = {"kp": "P86", "as": "P676", "pr": "P162", "lab": "P264"}
+            qid = {k: self._wartosci(e, p) for k, p in pola.items()}
+            et = self._etykiety(sorted({x for v in qid.values() for x in v}))
+            w = {k: [et.get(x, x) for x in v] for k, v in qid.items() if v}
+            data = self._wartosci(e, "P577")
+            if data:
+                w["wdd"] = data[0].lstrip("+")[:10]
+            w["wd"] = q
+            return w
+        return {}
+
+
 def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisji: int = 20) -> int:
     """Szczegóły z MusicBrainz (kompozytor, autor słów, wydanie) dla utworów z ≥ min_emisji, najczęściej grane najpierw."""
     odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="szczegoly", min=min_emisji)
@@ -298,7 +375,7 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
         return 0
     braki = odp["klucze"]
     print(f"Bez szczegółów (≥ {min_emisji} emisji): {len(braki)}", flush=True)
-    mb, wynik, z_kompozytorem, sprawdzone = MusicBrainz(), {}, 0, 0
+    mb, wd, wynik, z_kompozytorem, z_wikidata, sprawdzone = MusicBrainz(), Wikidata(), {}, 0, 0, 0
     for k, a, t, _n in braki:
         if time.monotonic() > koniec:
             break
@@ -307,7 +384,23 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
         except Exception as e:  # sieć – spróbujemy następnym razem
             print(f"Szczegóły: {a} – {t}: {e}", file=sys.stderr)
             continue
-        wynik[k] = w
+        if not (w.get("kp") or w.get("as") or w.get("au")):
+            # MusicBrainz bez twórców – Wikidata (osobny serwis, własny limit)
+            try:
+                d = wd.tworcy(a, t)
+            except Exception as e:
+                d = {}
+                print(f"Wikidata: {a} – {t}: {e}", file=sys.stderr)
+            if d.get("kp") or d.get("as"):
+                z_wikidata += 1
+                w.update({"zt": "Wikidata", "kp": d.get("kp", []), "as": d.get("as", []), "wd": d["wd"]})
+                if d.get("pr") and not w.get("pr"):
+                    w["pr"] = d["pr"]
+                if d.get("lab") and not (w.get("wy") or {}).get("lab"):
+                    w["wlab"] = d["lab"]
+            elif d.get("wd"):
+                w["wd"] = d["wd"]
+        wynik[k] = {x: v for x, v in w.items() if v not in ([], None, "")}
         sprawdzone += 1
         z_kompozytorem += bool(w.get("kp") or w.get("au") or w.get("as"))
         if len(wynik) >= 100:
@@ -315,5 +408,5 @@ def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisj
             wynik.clear()
     if wynik:
         mag.wyslij("zapiszMetadane", metadane=wynik)
-    print(f"Szczegóły: sprawdzono {sprawdzone}, z kompozytorem/autorem {z_kompozytorem}", flush=True)
+    print(f"Szczegóły: sprawdzono {sprawdzone}, z kompozytorem/autorem {z_kompozytorem} (w tym z Wikidata {z_wikidata})", flush=True)
     return len(braki)
