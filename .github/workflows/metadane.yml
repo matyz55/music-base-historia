@@ -1,5 +1,6 @@
-# Metadane utworów bez przerwy: rok/kraj/długość (Songster, MusicBrainz), język tekstu (lrclib.net), disco polo.
-# Trzy tryby równolegle, każdy w osobnym zadaniu (osobny adres IP, limity źródeł po ~1 zapytaniu na sekundę).
+# Metadane utworów bez przerwy: rok/kraj/długość (Songster, MusicBrainz), język i wulgaryzmy (lrclib.net), disco polo,
+# szczegóły z MusicBrainz (kompozytor, autor słów, wydanie) dla utworów z ≥ 20 emisjami.
+# Cztery tryby równolegle, każdy w osobnym zadaniu (osobny adres IP, limity źródeł po ~1 zapytaniu na sekundę).
 # Zadanie trwa do ~5 h; gdy zostaje praca, zleca następne tego samego trybu. Repozytorium publiczne – minuty bez opłat.
 # Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN.
 name: Metadane
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       tryb:
-        description: "mb, jezyk, gatunek albo wszystkie"
+        description: "mb, jezyk, gatunek, szczegoly albo wszystkie"
         default: "wszystkie"
 permissions:
   contents: read
@@ -19,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        tryb: ${{ fromJSON((github.event.inputs.tryb == '' || github.event.inputs.tryb == null || github.event.inputs.tryb == 'wszystkie') && '["mb","jezyk","gatunek"]' || format('["{0}"]', github.event.inputs.tryb)) }}
+        tryb: ${{ fromJSON((github.event.inputs.tryb == '' || github.event.inputs.tryb == null || github.event.inputs.tryb == 'wszystkie') && '["mb","jezyk","gatunek","szczegoly"]' || format('["{0}"]', github.event.inputs.tryb)) }}
     concurrency:
       group: metadane-${{ matrix.tryb }}
       cancel-in-progress: false

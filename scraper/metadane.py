@@ -66,6 +66,46 @@ class MusicBrainz:
             self.kraje[artist_id] = (self._get(f"/artist/{artist_id}?fmt=json") or {}).get("country")
         return self.kraje[artist_id]
 
+    def nagranie(self, a: str, t: str) -> dict | None:
+        """Najlepiej dopasowane nagranie z wyszukiwarki (wynik ≥ 90, ten sam tytuł, wykonawca w kredytach, najwcześniejsze)."""
+        glowny = re.split(r"\s*(?:/|&|,| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0]
+        tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
+        d = self._get("/recording?fmt=json&limit=25&query=" + urllib.parse.quote(f'recording:"{tyt}" AND artist:"{glowny}"'))
+        wk, tk, naj = set(wykonawcy(a)), tytul(t), None
+        for r in d.get("recordings", []):
+            if r.get("score", 0) < 90 or tytul(r.get("title", "")) != tk:
+                continue
+            if not any(wykonawca(k.get("name", "")) in wk for k in (r.get("artist-credit") or []) if isinstance(k, dict)):
+                continue
+            if naj is None or (r.get("first-release-date") or "9999") < (naj.get("first-release-date") or "9999"):
+                naj = r
+        return naj
+
+    def szczegoly(self, a: str, t: str) -> dict:
+        """Kompozytor, autor słów, producent, ISRC/ISWC, pierwsze wydawnictwo z wytwórnią – pola do metadanych
+        (kp, as, au, ar, pr, isrc, iswc, wy, mb) i znacznik sz (sprawdzone). Do 4 zapytań."""
+        wynik: dict = {"sz": int(time.time() * 1000)}
+        r0 = self.nagranie(a, t)
+        if not r0:
+            return wynik
+        r = self._get(f"/recording/{r0['id']}?fmt=json&inc=isrcs+releases+release-groups+work-rels+artist-rels") or {}
+        rola = lambda rel, typy: sorted({x["artist"]["name"] for x in rel or [] if x.get("artist") and x.get("type") in typy})
+        wynik.update({"mb": r0["id"], "pr": rola(r.get("relations"), {"producer", "co-producer"}), "isrc": (r.get("isrcs") or [])[:3]})
+        wyd = sorted([x for x in r.get("releases") or [] if x.get("date")], key=lambda x: x["date"])
+        pierwsze = next((x for x in wyd if x.get("status") == "Official"), wyd[0] if wyd else None)
+        if pierwsze:
+            rel = self._get(f"/release/{pierwsze['id']}?fmt=json&inc=labels") or {}
+            wynik["wy"] = {"t": pierwsze.get("title"), "d": pierwsze.get("date"), "k": pierwsze.get("country"),
+                           "typ": (pierwsze.get("release-group") or {}).get("primary-type"), "id": pierwsze["id"],
+                           "lab": [x["label"]["name"] for x in rel.get("label-info") or [] if x.get("label")][:3]}
+        praca = next((x["work"] for x in r.get("relations") or [] if x.get("work")), None)
+        if praca:
+            w = self._get(f"/work/{praca['id']}?fmt=json&inc=artist-rels") or {}
+            rel = w.get("relations")
+            wynik.update({"kp": rola(rel, {"composer"}), "as": rola(rel, {"lyricist"}), "au": rola(rel, {"writer"}),
+                          "ar": rola(rel, {"arranger"}), "iswc": (w.get("iswcs") or [])[:2]})
+        return {k: v for k, v in wynik.items() if v not in ([], None, "")}
+
     def utwor(self, a: str, t: str) -> dict | None:
         glowny = re.split(r"\s*(?:/|&|,| feat\.? | ft\.? | x )\s*", a, flags=re.I)[0]
         tyt = re.sub(r"\s*[(\[].*?[)\]]", "", t).strip()
@@ -248,3 +288,32 @@ def _metadane(a, jez_min: float, koniec: float) -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def szczegoly_pass(mag: MagazynDysk, koniec: float, limit: int = 2000, min_emisji: int = 20) -> int:
+    """Szczegóły z MusicBrainz (kompozytor, autor słów, wydanie) dla utworów z ≥ min_emisji, najczęściej grane najpierw."""
+    odp = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="szczegoly", min=min_emisji)
+    if odp.get("tryb") != "szczegoly":
+        print("Odbiornik bez trybu „szczegoly” – pomijam do aktualizacji OdbiornikAgregaty.gs")
+        return 0
+    braki = odp["klucze"]
+    print(f"Bez szczegółów (≥ {min_emisji} emisji): {len(braki)}", flush=True)
+    mb, wynik, z_kompozytorem, sprawdzone = MusicBrainz(), {}, 0, 0
+    for k, a, t, _n in braki:
+        if time.monotonic() > koniec:
+            break
+        try:
+            w = mb.szczegoly(a, t)
+        except Exception as e:  # sieć – spróbujemy następnym razem
+            print(f"Szczegóły: {a} – {t}: {e}", file=sys.stderr)
+            continue
+        wynik[k] = w
+        sprawdzone += 1
+        z_kompozytorem += bool(w.get("kp") or w.get("au") or w.get("as"))
+        if len(wynik) >= 100:
+            mag.wyslij("zapiszMetadane", metadane=dict(wynik))
+            wynik.clear()
+    if wynik:
+        mag.wyslij("zapiszMetadane", metadane=wynik)
+    print(f"Szczegóły: sprawdzono {sprawdzone}, z kompozytorem/autorem {z_kompozytorem}", flush=True)
+    return len(braki)
