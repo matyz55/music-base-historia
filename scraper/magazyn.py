@@ -86,7 +86,13 @@ class MagazynDysk:
         if not self.url or not self.token:
             raise SystemExit("Brak ODBIORNIK_URL lub ODBIORNIK_TOKEN (sekrety GitHuba albo zmienne środowiskowe).")
 
+    # aktualizacja bieżąca ustawia True: przy zajętej blokadzie Odbiornik odkłada zapis do kolejki, zamiast kazać czekać
+    # (starsza wersja Odbiornika pole ignoruje i czeka jak dotąd)
+    kolejka = False
+
     def wyslij(self, akcja: str, **dane) -> dict:
+        if self.kolejka:
+            dane["kolejka"] = True
         tresc = json.dumps({"akcja": akcja, "token": self.token, **dane}, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(self.url, data=tresc, headers={"Content-Type": "application/json"})
         ostatni = None
