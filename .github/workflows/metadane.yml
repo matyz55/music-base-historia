@@ -1,0 +1,46 @@
+# Metadane utworów bez przerwy: rok/kraj/długość (Songster, MusicBrainz), język tekstu (lrclib.net), disco polo.
+# Trzy tryby równolegle, każdy w osobnym zadaniu (osobny adres IP, limity źródeł po ~1 zapytaniu na sekundę).
+# Zadanie trwa do ~5 h; gdy zostaje praca, zleca następne tego samego trybu. Repozytorium publiczne – minuty bez opłat.
+# Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: Metadane
+on:
+  schedule:
+    - cron: "17 4 * * *"   # zapas, gdyby łańcuch się przerwał
+  workflow_dispatch:
+    inputs:
+      tryb:
+        description: "mb, jezyk, gatunek albo wszystkie"
+        default: "wszystkie"
+permissions:
+  contents: read
+  actions: write   # tylko do uruchomienia następnego zadania (workflow_dispatch)
+jobs:
+  metadane:
+    strategy:
+      fail-fast: false
+      matrix:
+        tryb: ${{ fromJSON((github.event.inputs.tryb == '' || github.event.inputs.tryb == null || github.event.inputs.tryb == 'wszystkie') && '["mb","jezyk","gatunek"]' || format('["{0}"]', github.event.inputs.tryb)) }}
+    concurrency:
+      group: metadane-${{ matrix.tryb }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Uzupełniaj metadane (do 300 min)
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m scraper.metadane_petla --tryb ${{ matrix.tryb }} --max-minuty 300 | tee wynik.txt
+      - name: Następne zadanie tego trybu, jeśli zostało coś do zrobienia
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f wynik.txt ] && grep -q "ZOSTALA_PRACA" wynik.txt; then
+            gh workflow run metadane.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f tryb=${{ matrix.tryb }} && echo "Zlecono kolejne zadanie."
+          else
+            echo "Nic nie zostało – kolejne zadanie tylko z harmonogramu."
+          fi

@@ -15,17 +15,17 @@ concurrency:
 jobs:
   przeliczanie:
     runs-on: ubuntu-latest
-    timeout-minutes: 100   # 40 min przeliczania + 15 min metadanych + 25 min przerwy przed kolejnym zleceniem
+    timeout-minutes: 80   # 40 min przeliczania + 25 min przerwy przed kolejnym zleceniem
     steps:
       - uses: actions/checkout@v4
-      - name: Przelicz podsumowania i uzupełnij metadane
+      - name: Przelicz podsumowania
         env:
           ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
           ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
         run: |
           if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
           python3 -m scraper.przeliczanie --max-minuty 40 | tee wynik.txt
-          python3 -m scraper.metadane --max-minuty 15
+          # metadane: osobne zadanie metadane.yml (bez przerwy, od 12.11.2026)
       # Harmonogram GitHuba potrafi pominąć uruchomienia na kilka godzin (11.11.2026: 1–2 z ~12), więc
       # gdy praca nie jest skończona, zadanie od razu zleca następne. Repozytorium publiczne – minuty bez opłat.
       - name: Następne zadanie od razu, jeśli zostało coś do zrobienia

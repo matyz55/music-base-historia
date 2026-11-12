@@ -191,7 +191,7 @@ def klasyfikuj(z: Zrodla, a: str, t: str, gatunki: list[str] | None) -> str | No
     return None
 
 
-def gatunki_pass(mag, koniec: float, limit: int = 5000) -> None:
+def gatunki_pass(mag, koniec: float, limit: int = 5000) -> int:
     """Sprawdza utwory bez bieżącej wersji sprawdzenia (gp < WERSJA) – najczęściej grane najpierw."""
     try:
         mag.wyslij("zapiszMetadane", metadane={klucz(a, t): {"dp": False} for a, t in KOREKTY})
@@ -201,19 +201,19 @@ def gatunki_pass(mag, koniec: float, limit: int = 5000) -> None:
         braki = mag.wyslij("kluczeBezMetadanych", tryb="gatunek", wersja=WERSJA, limit=limit)["klucze"]
     except Exception as e:  # stara wersja Odbiornika – pominięcie do aktualizacji
         print(f"Disco polo: pomijam ({e})")
-        return
+        return 0
     if braki and len(braki[0]) < 5:   # stary Odbiornik nie zna trybu „gatunek” (zwraca listę bez gatunków)
         print("Disco polo: Odbiornik bez trybu „gatunek” – pomijam do aktualizacji OdbiornikAgregaty.gs")
-        return
+        return 0
     if not braki:
         print("Disco polo: wszystkie utwory sprawdzone")
-        return
+        return 0
     z = Zrodla()
     try:
         z.wczytaj()
     except Exception as e:   # MusicBrainz przeciążony – spróbujemy przy następnym uruchomieniu
         print(f"Disco polo: źródła niedostępne ({e}) – pomijam w tym uruchomieniu")
-        return
+        return 0
     print(f"Disco polo: źródła – wykonawców (nazw) {len(z.nazwy)}, identyfikatorów MusicBrainz {len(z.mbid)}, utworów z Wikidata {len(z.utwory)}; do sprawdzenia {len(braki)}", flush=True)
     wynik, oznaczone, sprawdzone = {}, [], 0
     for wiersz in braki:
@@ -238,3 +238,4 @@ def gatunki_pass(mag, koniec: float, limit: int = 5000) -> None:
     print(f"Disco polo: sprawdzono {sprawdzone}, oznaczono {len(oznaczone)}")
     for o in oznaczone[:200]:
         print("  disco polo:", o)
+    return sprawdzone

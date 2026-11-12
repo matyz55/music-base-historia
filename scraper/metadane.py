@@ -126,8 +126,9 @@ def jezyk_tekstu(tekst: str) -> str:
     return "inny"
 
 
-def jezyki(mag: MagazynDysk, koniec: float) -> None:
-    braki = mag.wyslij("kluczeBezMetadanych", limit=3000, tryb="jezyk")["klucze"]
+def jezyki(mag: MagazynDysk, koniec: float, limit: int = 3000) -> int:
+    """Język tekstu z lrclib.net (1 zapytanie/s); zwraca liczbę utworów do sprawdzenia w tej porcji (0 = koniec)."""
+    braki = mag.wyslij("kluczeBezMetadanych", limit=limit, tryb="jezyk")["klucze"]
     print(f"Bez języka tekstu: {len(braki)}")
     wynik, ostatnie, liczniki = {}, 0.0, {}
     for k, a, t, _n in braki:
@@ -157,7 +158,8 @@ def jezyki(mag: MagazynDysk, koniec: float) -> None:
             wynik.clear()
     if wynik:
         mag.wyslij("zapiszMetadane", metadane=wynik)
-    print(f"Język tekstu: {liczniki}")
+    print(f"Język tekstu: {liczniki}", flush=True)
+    return len(braki)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -171,7 +173,8 @@ def main(argv: list[str] | None = None) -> int:
     gat_min = a.max_minuty / 3 if a.gatunek_minuty is None else a.gatunek_minuty
     koniec = time.monotonic() + (a.max_minuty - jez_min - gat_min) * 60
     try:
-        return _metadane(a, jez_min, koniec)
+        _metadane(a, jez_min, koniec)
+        return 0
     finally:
         if gat_min > 0:
             gatunki_pass(MagazynDysk(), time.monotonic() + gat_min * 60)
@@ -186,7 +189,7 @@ def _metadane(a, jez_min: float, koniec: float) -> int:
             print("Odbiornik nie ma jeszcze tej funkcji (stara wersja wdrożenia) – pomijam do aktualizacji.")
             return 0
         raise
-    print(f"Bez metadanych: {len(braki)} (najczęściej grane najpierw)")
+    print(f"Bez metadanych: {len(braki)} (najczęściej grane najpierw)", flush=True)
     if not braki:
         if jez_min > 0:
             jezyki(mag, time.monotonic() + jez_min * 60)
@@ -229,10 +232,10 @@ def _metadane(a, jez_min: float, koniec: float) -> int:
         if len(wynik) >= 100:
             wyslij()
     wyslij()
-    print(f"Songster: {z_songstera}, MusicBrainz: {z_mb}, bez wyniku: {bez}, niesprawdzone (limit czasu): {len(reszta) - z_mb - bez}")
+    print(f"Songster: {z_songstera}, MusicBrainz: {z_mb}, bez wyniku: {bez}, niesprawdzone (limit czasu): {len(reszta) - z_mb - bez}", flush=True)
     if jez_min > 0:
         jezyki(mag, time.monotonic() + jez_min * 60)
-    return 0
+    return len(braki)
 
 
 if __name__ == "__main__":
