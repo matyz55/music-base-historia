@@ -80,11 +80,14 @@ class MusicBrainz:
                 continue
             data = r["first-release-date"]
             if najlepsze is None or data < najlepsze[0]:
-                najlepsze = (data, kredyty[0]["artist"]["id"])
+                najlepsze = (data, kredyty[0]["artist"]["id"], r.get("length"))
         if not najlepsze:
             return None
         kraj = self.kraj(najlepsze[1])
         wynik = {"y": int(najlepsze[0][:4]), "d": najlepsze[0], "z": "MusicBrainz"}
+        # długość nagrania (ms w MusicBrainz) → sekundy; panel liczy z niej minuty muzyki i kwotę wg czasu (A7, A8)
+        if isinstance(najlepsze[2], int) and 30_000 <= najlepsze[2] <= 1_200_000:
+            wynik["l"] = round(najlepsze[2] / 1000)
         if kraj:
             wynik.update({"cc": kraj, "c": "PL" if kraj == "PL" else "INT"})
         return wynik
