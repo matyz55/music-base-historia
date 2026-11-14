@@ -142,7 +142,15 @@ def listenbrainz_pass(mag: MagazynDysk, koniec: float, limit: int = 5000) -> int
 # ---------------- I3: Apple Music Top Polska ----------------
 
 def apple_top(mag: MagazynDysk) -> int:
-    d = _get("https://rss.marketingtools.apple.com/api/v2/pl/music/most-played/100/songs.json")
+    for proba in range(3):   # serwis bywa wolny (14.11.2026: przekroczony czas odpowiedzi)
+        try:
+            d = _get("https://rss.marketingtools.apple.com/api/v2/pl/music/most-played/100/songs.json", timeout=60)
+            break
+        except Exception as e:
+            if proba == 2:
+                raise
+            print(f"Apple Music: {e} – ponawiam", flush=True)
+            time.sleep(15 * (proba + 1))
     pozycje = [{"poz": i + 1, "a": r.get("artistName", ""), "t": r.get("name", ""), "id": r.get("id"), "url": r.get("url"), "wyd": r.get("releaseDate")}
                for i, r in enumerate(d.get("feed", {}).get("results", []))]
     for p in pozycje:
@@ -212,10 +220,12 @@ def main(argv: list[str] | None = None) -> int:
                 break
         else:
             zostalo = True
-    for tryb, f in (("apple", lambda: apple_top(mag)), ("listenbrainz", lambda: listenbrainz_pass(mag, koniec)), ("youtube", lambda: youtube_pass(mag, koniec))):
+    # każde źródło ma własny limit czasu (14.11.2026: wspólny limit zużył ListenBrainz i YouTube nie wykonał żadnego wyszukiwania);
+    # YouTube przed ListenBrainz – ma dzienny limit zapytań, więc robi mało, ale codziennie
+    for tryb, f in (("apple", lambda k: apple_top(mag)), ("youtube", lambda k: youtube_pass(mag, k)), ("listenbrainz", lambda k: listenbrainz_pass(mag, k))):
         if a.tryb in (tryb, "dzienne"):
             try:
-                f()
+                f(time.monotonic() + a.max_minuty * 60)
             except Exception as e:  # jedno źródło nie zatrzymuje pozostałych
                 print(f"BŁĄD {tryb}: {e}", flush=True)
     if zostalo:
