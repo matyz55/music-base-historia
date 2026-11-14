@@ -1,0 +1,50 @@
+# Zewnętrzne źródła o utworach (plan rozwoju I1–I4): Deezer (tempo, popularność, ISRC) bez przerwy dla utworów
+# z ≥ 5 emisjami, raz na dobę Apple Music Top Polska, ListenBrainz i YouTube (sekret YOUTUBE_API_KEY – opcjonalny).
+# Repozytorium publiczne – minuty bez opłat. Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN, YOUTUBE_API_KEY (opcjonalny).
+name: Zrodla zewnetrzne
+on:
+  schedule:
+    - cron: "41 5 * * *"
+  workflow_dispatch:
+    inputs:
+      tryb:
+        description: "deezer, dzienne albo wszystkie"
+        default: "wszystkie"
+permissions:
+  contents: read
+  actions: write   # tylko do uruchomienia następnego zadania Deezera
+jobs:
+  zrodla:
+    strategy:
+      fail-fast: false
+      matrix:
+        tryb: ${{ fromJSON((github.event.inputs.tryb == '' || github.event.inputs.tryb == null || github.event.inputs.tryb == 'wszystkie') && '["deezer","dzienne"]' || format('["{0}"]', github.event.inputs.tryb)) }}
+    concurrency:
+      group: zrodla-${{ matrix.tryb }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pobierz dane
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m scraper.zrodla_zewnetrzne --tryb ${{ matrix.tryb }} --max-minuty ${{ matrix.tryb == 'deezer' && 300 || 40 }} | tee wynik.txt
+      - name: Raport do panelu (dziennik zadań)
+        if: always()
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.raport_zadania --zadanie "zrodla-${{ matrix.tryb }}" --status "${{ job.status }}" --plik wynik.txt
+      - name: Następne zadanie Deezera, jeśli zostało coś do zrobienia
+        if: success() && matrix.tryb == 'deezer'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f wynik.txt ] && grep -q "ZOSTALA_PRACA" wynik.txt; then
+            gh workflow run zrodla.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f tryb=deezer && echo "Zlecono kolejne zadanie."
+          fi
