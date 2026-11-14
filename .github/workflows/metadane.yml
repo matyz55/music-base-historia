@@ -36,6 +36,12 @@ jobs:
         run: |
           if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
           python3 -m scraper.metadane_petla --tryb ${{ matrix.tryb }} --max-minuty 300 | tee wynik.txt
+      - name: Raport do panelu (dziennik zadań)
+        if: always()
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.raport_zadania --zadanie "metadane-${{ matrix.tryb }}" --status "${{ job.status }}" --plik wynik.txt
       - name: Następne zadanie tego trybu, jeśli zostało coś do zrobienia
         if: always()
         env:
