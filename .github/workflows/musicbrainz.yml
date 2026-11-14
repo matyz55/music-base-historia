@@ -1,0 +1,33 @@
+# K8 (plan rozwoju): identyfikatory nagrań MusicBrainz ze zrzutu kanonicznego (CC0, ok. 2 GB, czytany strumieniowo –
+# nic nie trafia na dysk). MetaBrainz publikuje zrzut ok. dwa razy w miesiącu – zadanie co 2 tygodnie.
+# Repozytorium publiczne – minuty bez opłat. Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: MusicBrainz zrzut
+on:
+  schedule:
+    - cron: "17 2 6,21 * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: musicbrainz-zrzut
+  cancel-in-progress: false
+jobs:
+  zrzut:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - name: Dopasuj utwory do zrzutu
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$ODBIORNIK_TOKEN" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m pip install --quiet zstandard || echo "bez modułu zstandard – użyję programu zstd"
+          python3 -m scraper.musicbrainz_zrzut --max-minuty 300 | tee wynik.txt
+      - name: Raport do panelu (dziennik zadań)
+        if: always()
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.raport_zadania --zadanie "musicbrainz-zrzut" --status "${{ job.status }}" --plik wynik.txt
