@@ -1,0 +1,24 @@
+# Pomiar rozmiaru danych w Odbiorniku (do aplikacji offline / PWA). Uruchamiane ręcznie; wypisuje tylko liczby.
+# Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN.
+name: Rozmiar danych
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pomiar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Zmierz
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.rozmiar_danych | tee wynik.txt
+      - name: Raport do panelu (dziennik zadań)
+        if: always()
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.raport_zadania --zadanie "rozmiar-danych" --status "${{ job.status }}" --plik wynik.txt
