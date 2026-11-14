@@ -10,13 +10,14 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  actions: write   # tylko do uruchomienia kolejnego zadania, gdy pierwsze pobieranie nie zmieściło się w czasie
 concurrency:
   group: strona-cf
   cancel-in-progress: false
 jobs:
   strona:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 330
     steps:
       - uses: actions/checkout@v4
       - uses: actions/cache@v4
@@ -33,10 +34,18 @@ jobs:
         run: |
           if [ -z "$ODBIORNIK_URL" ] || [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
           python3 -m pip install --quiet duckdb==1.5.6
-          python3 -m scraper.strona_cf --katalog data/cf --projekt music-base | tee wynik.txt
+          python3 -m scraper.strona_cf --katalog data/cf --projekt music-base --max-minuty 240 | tee wynik.txt
       - name: Raport do panelu (dziennik zadań)
         if: always()
         env:
           ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
           ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
         run: python3 -m scraper.raport_zadania --zadanie "strona-cf" --status "${{ job.status }}" --plik wynik.txt
+      - name: Kolejne zadanie, jeśli zostało coś do pobrania
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -f wynik.txt ] && grep -q "ZOSTALA_PRACA" wynik.txt && ! grep -q "nie jest chroniona" wynik.txt; then
+            gh workflow run strona-cf.yml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" && echo "Zlecono kolejne zadanie."
+          fi

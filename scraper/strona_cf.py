@@ -45,6 +45,16 @@ def _gz_json(b: bytes):
         return gzip.decompress(base64.b64decode(b))
 
 
+# PWA: z _agg tylko to, co czyta panel (v2 i kilka folderów); _agg/<stacja> i _agg/_wszystkie to stary format v1 (~80 MB)
+AGG_DLA_PANELU = {"v2", "metadane", "ankiety", "zadania", "zewnetrzne", "ramowki", "ramowki_dzien"}
+KONIEC = [None]   # time.monotonic() – po tym czasie pobieranie przerywamy (reszta w kolejnym uruchomieniu)
+
+
+def _dla_panelu(s: str) -> bool:
+    cz = s.split("/")
+    return not (len(cz) > 3 and cz[1] == "_agg" and cz[2] not in AGG_DLA_PANELU)
+
+
 def synchronizuj(mag, katalog: str, tryb: str = "lista") -> dict:
     """Pliki z Odbiornika do katalog/pliki (tylko zmienione od poprzedniego razu – manifest). Zwraca listę zmienionych.
     tryb „lista” – widoki i surowe emisje (SQL), „drzewo” – pliki panelu dla aplikacji offline (PWA)."""
@@ -54,7 +64,7 @@ def synchronizuj(mag, katalog: str, tryb: str = "lista") -> dict:
     lista = mag.lista_partiami("eksportPlikow", **{tryb: True})
     if tryb == "drzewo":   # na Dysku bywa kilka kopii o tej samej nazwie – najnowsza
         naj = {}
-        for p in lista:
+        for p in [p for p in lista if _dla_panelu(p["s"])]:
             if p["s"] not in naj or p["t"] > naj[p["s"]]["t"]:
                 naj[p["s"]] = p
         lista = sorted(naj.values(), key=lambda p: p["s"])
@@ -68,6 +78,10 @@ def synchronizuj(mag, katalog: str, tryb: str = "lista") -> dict:
     print(f"Plików w Odbiorniku: {len(lista)}, do pobrania: {len(zmienione)} ({sum(p['b'] for p in zmienione) / 1e6:.1f} MB)", flush=True)
     i = 0
     while i < len(zmienione):
+        if KONIEC[0] and time.monotonic() > KONIEC[0]:
+            print(f"Limit czasu – pobrano {i} z {len(zmienione)} plików, resztę pobierze kolejne uruchomienie.", flush=True)
+            print("ZOSTALA_PRACA", flush=True)
+            break
         paczka, b = [], 0
         while i < len(zmienione) and (not paczka or b + zmienione[i]["b"] <= MAX_PACZKA):
             paczka.append(zmienione[i]); b += zmienione[i]["b"]; i += 1
@@ -103,6 +117,13 @@ def zbuduj_paczki(katalog: str, wyjscie: str) -> dict:
     """PWA: pliki panelu w paczkach (folder × rok z nazwy pliku) → dane/p/<id>.bin + spis dane/drzewo.json.
     Format paczki: 4 bajty (długość nagłówka, little endian) + nagłówek JSON [[ścieżka, przesunięcie, długość]] + treści."""
     lista = json.load(open(os.path.join(katalog, "drzewo_lista.json")))
+    sc_man = os.path.join(katalog, "manifest.json")
+    man = json.load(open(sc_man)) if os.path.exists(sc_man) else {}
+    brak = [p for p in lista if man.get(p["s"]) != p["t"] or not os.path.exists(_lok(katalog, p["s"]))]
+    if brak:
+        print(f"Aplikacja: {len(brak)} plików jeszcze niepobranych – w tej publikacji ich nie ma", flush=True)
+        brak_s = {p["s"] for p in brak}
+        lista = [p for p in lista if p["s"] not in brak_s]
     grupy: dict[str, list] = {}
     for p in lista:
         sc = p["s"][2:]
@@ -254,16 +275,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--projekt", default="music-base")
     ap.add_argument("--bez-pobierania", action="store_true")
     ap.add_argument("--bez-publikacji", action="store_true")
+    ap.add_argument("--max-minuty", type=float, default=0, help="limit pobierania (0 – bez limitu); reszta w kolejnym uruchomieniu")
     a = ap.parse_args(argv)
+    if a.max_minuty:
+        KONIEC[0] = time.monotonic() + a.max_minuty * 60
     zmienione = None
     if not a.bez_pobierania:
         from .magazyn import MagazynDysk
         mag = MagazynDysk()
-        zmienione = synchronizuj(mag, a.katalog)
-        try:
+        try:   # najpierw aplikacja (PWA), potem surowe emisje do zapytań SQL
             synchronizuj(mag, a.katalog, "drzewo")
         except RuntimeError as e:   # Odbiornik bez trybu drzewa (stary OdbiornikEksport.gs) – strona bez aplikacji
             print(f"Pliki aplikacji offline niedostępne ({e}) – publikuję bez niej.", flush=True)
+        zmienione = synchronizuj(mag, a.katalog)
     wyjscie = os.path.join(a.katalog, "strona")
     if a.bez_publikacji:
         zbuduj_strone(a.katalog, wyjscie, zmienione)
