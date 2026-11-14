@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Base</title>
+<style>
+:root { --tlo: #f6f5f1; --karta: #ffffff; --tekst: #1c1b19; --tekst2: #6a665f; --linia: #e3e0d9; --akcent: #c2410c; --plus: #15803d; --minus: #b91c1c; }
+@media (prefers-color-scheme: dark) { :root { --tlo: #141312; --karta: #1d1c1a; --tekst: #ecebe7; --tekst2: #a29d94; --linia: #33302b; --akcent: #fb923c; --plus: #4ade80; --minus: #f87171; } }
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--tlo); color: var(--tekst); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+header { padding: 14px 16px 0; max-width: 1100px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0; } h1 small { color: var(--tekst2); font-weight: 400; font-size: 13px; margin-left: 8px; }
+nav { display: flex; gap: 6px; overflow-x: auto; padding: 10px 0; }
+nav button, .chip { border: 1px solid var(--linia); background: var(--karta); color: var(--tekst); border-radius: 999px; padding: 6px 14px; font: inherit; cursor: pointer; white-space: nowrap; }
+nav button[aria-pressed="true"] { background: var(--akcent); border-color: var(--akcent); color: #fff; }
+main { max-width: 1100px; margin: 0 auto; padding: 0 16px 60px; }
+.karta { background: var(--karta); border: 1px solid var(--linia); border-radius: 12px; padding: 14px; margin: 0 0 14px; }
+.wiersz { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 10px; }
+select, textarea, input { font: inherit; color: var(--tekst); background: var(--tlo); border: 1px solid var(--linia); border-radius: 8px; padding: 6px 8px; }
+textarea { width: 100%; min-height: 110px; font-family: ui-monospace, monospace; font-size: 13px; }
+.tab { width: 100%; overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; }
+th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--linia); vertical-align: top; }
+th { color: var(--tekst2); font-weight: 500; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.wiersz .chip { white-space: normal; text-align: left; }
+main, .karta { min-width: 0; } .tab { max-width: 100%; }
+.szary { color: var(--tekst2); } .plus { color: var(--plus); } .minus { color: var(--minus); }
+.przycisk { background: var(--akcent); color: #fff; border: 0; border-radius: 8px; padding: 8px 16px; font: inherit; cursor: pointer; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Music Base <small id="zbud"></small></h1>
+  <nav id="nav"><button data-w="ranking" aria-pressed="true">Ranking</button><button data-w="notowanie">Notowanie</button><button data-w="sql">Zapytania SQL</button></nav>
+</header>
+<main id="tresc"><p class="szary">Wczytywanie…</p></main>
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const tresc = $('#tresc');
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const fmt = (n) => n == null ? '–' : Number(n).toLocaleString('pl-PL');
+const dataPL = (d) => d ? d.slice(8, 10) + '.' + d.slice(5, 7) + '.' + d.slice(0, 4) : '';
+const pobierz = async (u) => { const r = await fetch(u); if (!r.ok) throw new Error(u + ': ' + r.status); return r.json(); };
+const blad = (e) => { tresc.innerHTML = '<div class="karta">Błąd: ' + esc(e.message || e) + '</div>'; };
+let SPIS = null;
+const OKRESY = [['7', '7 dni'], ['30', '30 dni'], ['90', '90 dni'], ['365', '365 dni'], ['rok', 'Ten rok'], ['wszystko', 'Cała historia']];
+const WARIANTY = [['', 'Wszystkie'], ['PL', 'Polskie'], ['INT', 'Zagraniczne']];
+
+function tabela(kol, wiersze) {
+  return '<div class="tab"><table><thead><tr>' + kol.map(([n, , k]) => `<th class="${k || ''}">${esc(n)}</th>`).join('') + '</tr></thead><tbody>' +
+    wiersze.map((x, i) => '<tr>' + kol.map(([, f, k]) => `<td class="${k || ''}">${f(x, i)}</td>`).join('') + '</tr>').join('') + '</tbody></table></div>';
+}
+const zmiana = (teraz, przed) => przed == null ? '<span class="szary">nowość</span>' : przed === teraz ? '<span class="szary">=</span>' : przed > teraz ? `<span class="plus">▲ ${przed - teraz}</span>` : `<span class="minus">▼ ${teraz - przed}</span>`;
+
+async function ranking() {
+  const dostepne = OKRESY.filter(([o]) => SPIS.widoki.includes('ranking_' + o + '.json'));
+  if (!dostepne.length) { tresc.innerHTML = '<div class="karta">Brak plików rankingów.</div>'; return; }
+  const st = { o: dostepne.some(([o]) => o === '30') ? '30' : dostepne[0][0], w: '' };
+  const rysuj = async () => {
+    const d = await pobierz('dane/ranking_' + st.o + '.json'), v = d.w[st.w] || d.w[''];
+    tresc.innerHTML = '<div class="karta"><div class="wiersz">' +
+      `<select id="o">${dostepne.map(([o, n]) => `<option value="${o}" ${o === st.o ? 'selected' : ''}>${n}</option>`).join('')}</select>` +
+      `<select id="w">${WARIANTY.map(([w, n]) => `<option value="${w}" ${w === st.w ? 'selected' : ''}>${n}</option>`).join('')}</select>` +
+      `<span class="szary">${dataPL(d.od)} – ${dataPL(d.do)} · ${fmt(d.emisji)} emisji · ${fmt(v.n)} utworów (wszystkie stacje)</span></div>` +
+      tabela([['#', (x, i) => i + 1, 'num'], ['Utwór', (x) => `<b>${esc((d.s[x[0]] || [])[1] || x[0].split('|')[1])}</b><br><span class="szary">${esc((d.s[x[0]] || [])[0] || x[0].split('|')[0])}</span>`],
+        ['Emisji', (x) => fmt(x[1]), 'num'], ['Zmiana', (x, i) => zmiana(i + 1, x[2]), 'num'], ['Rok temu', (x) => x[4] ? '#' + x[4] : '–', 'num']], v.u.slice(0, 200)) + '</div>';
+    $('#o').onchange = (e) => { st.o = e.target.value; rysuj().catch(blad); };
+    $('#w').onchange = (e) => { st.w = e.target.value; rysuj().catch(blad); };
+  };
+  await rysuj();
+}
+
+async function notowanie() {
+  const lata = SPIS.widoki.filter((n) => n.startsWith('tygodnie_')).sort().reverse();
+  if (!lata.length) { tresc.innerHTML = '<div class="karta">Brak plików tygodni.</div>'; return; }
+  const tyg = {};
+  for (const n of lata.slice(0, 2)) Object.assign(tyg, (await pobierz('dane/' + n)).w);
+  const lista = Object.keys(tyg).sort().reverse();
+  const st = { pn: lista.find((p) => { const k = new Date(p + 'T12:00:00Z'); k.setUTCDate(k.getUTCDate() + 6); return k.toISOString().slice(0, 10) < new Date().toISOString().slice(0, 10); }) || lista[0] };
+  const rysuj = () => {
+    const w = tyg[st.pn], i = lista.indexOf(st.pn), pop = tyg[lista[i + 1]], mPop = {};
+    (pop ? pop.u : []).forEach((x, j) => { mPop[x[0]] = j + 1; });
+    tresc.innerHTML = '<div class="karta"><div class="wiersz">' +
+      `<select id="pn">${lista.map((p) => `<option value="${p}" ${p === st.pn ? 'selected' : ''}>tydzień od ${dataPL(p)}</option>`).join('')}</select>` +
+      `<span class="szary">${fmt(w.n)} utworów w tygodniu, wszystkie stacje</span></div>` +
+      tabela([['#', (x, j) => j + 1, 'num'], ['Utwór', (x) => `<b>${esc(x[3])}</b><br><span class="szary">${esc(x[2])}</span>`], ['Emisji', (x) => fmt(x[1]), 'num'], ['Zmiana', (x, j) => zmiana(j + 1, mPop[x[0]] ?? null), 'num']], w.u.slice(0, 100)) + '</div>';
+    $('#pn').onchange = (e) => { st.pn = e.target.value; rysuj(); };
+  };
+  rysuj();
+}
+
+// X3: DuckDB-Wasm – pliki Parquet z tej samej strony (żądania HTTP Range, bez pobierania całości)
+let DB = null;
+async function baza() {
+  if (DB) return DB;
+  const duckdb = await import('https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.32.0/+esm');
+  const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
+  const wurl = URL.createObjectURL(new Blob([`importScripts("${bundle.mainWorker}");`], { type: 'text/javascript' }));
+  const db = new duckdb.AsyncDuckDB(new duckdb.VoidLogger(), new Worker(wurl));
+  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  URL.revokeObjectURL(wurl);
+  const nazwy = [];
+  for (const p of SPIS.parquet) {
+    const n = p.plik.replace('parquet/', '');
+    await db.registerFileURL(n, new URL(p.plik, location.href).href, duckdb.DuckDBDataProtocol.HTTP, false);
+    nazwy.push(`'${n}'`);
+  }
+  const c = await db.connect();
+  if (nazwy.length) await c.query(`CREATE VIEW emisje AS SELECT * FROM read_parquet([${nazwy.join(',')}])`);
+  DB = c;
+  return c;
+}
+const PRZYKLADY = [
+  ['Najczęściej grane w ostatnich 30 dniach (wszystkie stacje)', "SELECT any_value(a) AS wykonawca, any_value(t) AS tytul, count(*) AS emisji\nFROM emisje WHERE d >= current_date - 30\nGROUP BY k ORDER BY emisji DESC LIMIT 50"],
+  ['Emisje na stacjach w ostatnich 7 dniach', "SELECT stacja, count(*) AS emisji, count(DISTINCT k) AS utworow\nFROM emisje WHERE d >= current_date - 7\nGROUP BY stacja ORDER BY emisji DESC"],
+  ['Pierwsza emisja utworu na każdej stacji', "SELECT stacja, min(d) AS pierwsza, count(*) AS emisji\nFROM emisje WHERE k = 'dawid podsiadlo|malomiasteczkowy'\nGROUP BY stacja ORDER BY pierwsza"],
+  ['Godziny emisji wykonawcy (rozkład)', "SELECT substr(g, 1, 2) AS godzina, count(*) AS emisji\nFROM emisje WHERE k LIKE 'sanah|%'\nGROUP BY godzina ORDER BY godzina"],
+];
+function sql() {
+  const n = SPIS.parquet.length, mb = SPIS.parquet.reduce((s, p) => s + p.b, 0) / 1e6;
+  tresc.innerHTML = '<div class="karta"><p class="szary" style="margin-top:0">Tabela <b>emisje</b>: stacja, d (data), g (godzina), a (wykonawca), t (tytuł), k (klucz utworu), zr (źródło). ' +
+    `${fmt(n)} plików Parquet, ${mb.toFixed(1)} MB – przeglądarka pobiera tylko potrzebne fragmenty. Pierwsze zapytanie wczytuje DuckDB (ok. 30 MB, z cdn.jsdelivr.net).</p>` +
+    `<div class="wiersz">${PRZYKLADY.map((p, i) => `<button class="chip" data-p="${i}">${esc(p[0])}</button>`).join('')}</div>` +
+    `<textarea id="q">${esc(PRZYKLADY[0][1])}</textarea><div class="wiersz" style="margin-top:8px"><button class="przycisk" id="uruchom">Uruchom</button><span class="szary" id="czas"></span></div><div id="wynik"></div></div>`;
+  tresc.querySelectorAll('[data-p]').forEach((b) => { b.onclick = () => { $('#q').value = PRZYKLADY[+b.dataset.p][1]; }; });
+  $('#uruchom').onclick = async () => {
+    $('#czas').textContent = 'Liczę…';
+    const t0 = performance.now();
+    try {
+      const c = await baza(), w = await c.query($('#q').value), kol = w.schema.fields.map((f) => f.name);
+      const wiersze = w.toArray().slice(0, 1000).map((r) => r.toJSON());
+      $('#czas').textContent = `${fmt(w.numRows)} wierszy, ${((performance.now() - t0) / 1000).toFixed(1)} s`;
+      $('#wynik').innerHTML = tabela(kol.map((k) => [k, (x) => { const v = x[k]; return esc(typeof v === 'bigint' ? v.toString() : v instanceof Date ? v.toISOString().slice(0, 10) : v); }, '']), wiersze);
+    } catch (e) { $('#czas').textContent = ''; $('#wynik').innerHTML = '<p class="minus">' + esc(e.message || e) + '</p>'; }
+  };
+}
+
+const WIDOKI = { ranking, notowanie, sql };
+async function idz(w) {
+  document.querySelectorAll('#nav button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.w === w)));
+  tresc.innerHTML = '<p class="szary">Wczytywanie…</p>';
+  try { await WIDOKI[w](); } catch (e) { blad(e); }
+}
+document.querySelectorAll('#nav button').forEach((b) => { b.onclick = () => { history.replaceState(null, '', '#' + b.dataset.w); idz(b.dataset.w); }; });
+pobierz('dane/spis.json').then((s) => { SPIS = s; $('#zbud').textContent = 'stan z ' + s.zbudowano; idz(WIDOKI[location.hash.slice(1)] ? location.hash.slice(1) : 'ranking'); }).catch(blad);
+</script>
+</body>
+</html>

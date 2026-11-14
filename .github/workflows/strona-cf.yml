@@ -1,0 +1,42 @@
+# X1–X3 (plan rozwoju): strona Music Base na Cloudflare Pages (rankingi, notowanie, zapytania SQL na plikach Parquet).
+# Dane publikowane dopiero, gdy adres projektu jest chroniony przez Cloudflare Access (scraper/strona_cf.py sprawdza to
+# przed każdą publikacją). Pliki z Odbiornika i Parquet trzymane w pamięci podręcznej Actions – pobierane są tylko zmiany.
+# Repozytorium publiczne – minuty bez opłat; dane nie trafiają do repozytorium.
+# Sekrety: ODBIORNIK_URL, ODBIORNIK_TOKEN, CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (bez nich zadanie nic nie robi).
+name: Strona Cloudflare
+on:
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: strona-cf
+  cancel-in-progress: false
+jobs:
+  strona:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: data/cf
+          key: strona-cf-${{ github.run_id }}
+          restore-keys: strona-cf-
+      - name: Pobierz, zbuduj i opublikuj
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ -z "$ODBIORNIK_URL" ] || [ -z "$CLOUDFLARE_API_TOKEN" ] || [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then echo "Brak sekretów – pomijam."; exit 0; fi
+          python3 -m pip install --quiet duckdb==1.5.6
+          python3 -m scraper.strona_cf --katalog data/cf --projekt music-base | tee wynik.txt
+      - name: Raport do panelu (dziennik zadań)
+        if: always()
+        env:
+          ODBIORNIK_URL: ${{ secrets.ODBIORNIK_URL }}
+          ODBIORNIK_TOKEN: ${{ secrets.ODBIORNIK_TOKEN }}
+        run: python3 -m scraper.raport_zadania --zadanie "strona-cf" --status "${{ job.status }}" --plik wynik.txt
