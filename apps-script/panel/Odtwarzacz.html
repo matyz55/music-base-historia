@@ -290,8 +290,9 @@ const Odtwarzacz = (function () {
             maRamowke(stacja) ? el('button', { class: 'przycisk drugi maly', onclick: () => { rozwiniety = false; idz('epg', stacja); } }, 'Ramówka') : null,
             el('button', { class: 'przycisk drugi maly', onclick: stop }, 'Zamknij odtwarzacz')) : null)));
     } else if (zakladka === 'ostatnio') {
-      tresc.append(ostatnie.length ? el('div', { class: 'g-lista' }, ostatnie.map((u, i) => el('button', { class: 'g-poz', onclick: () => { rozwiniety = false; idz('utwor', u.k); } },
-        el('span', { class: 'sub num' }, u.g), el('span', { class: 'g-poz-t' }, el('b', {}, u.t), el('span', {}, u.a)), i === 0 ? el('span', { class: 'znacznik' }, 'teraz') : null)))
+      tresc.append(ostatnie.length ? el('div', { class: 'g-lista' }, ostatnie.map((u, i) => el('div', { class: 'g-poz' },
+        el('span', { class: 'sub num' }, u.g), u.a && u.t ? przyciskFragmentu(u) : null,
+        el('button', { class: 'g-poz-t', onclick: () => { rozwiniety = false; idz('utwor', u.k); } }, el('b', {}, u.t), el('span', {}, u.a)), i === 0 ? el('span', { class: 'znacznik' }, 'teraz') : null)))
         : el('p', { class: 'opis' }, stacja ? 'Brak danych o ostatnio granych utworach tej stacji.' : 'Włącz stację, aby zobaczyć, co grała.'));
     } else if (zakladka === 'kolejka') {
       tresc.append(kolejka.length ? el('div', { class: 'g-lista' }, kolejka.map((id, i) => el('div', { class: 'g-poz' + (id === stacja ? ' akt' : '') },

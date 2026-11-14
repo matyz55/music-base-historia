@@ -35,7 +35,7 @@ function kartaAppleListy() {
     box.replaceChildren(l.length ? el('div', {},
       el('div', { style: { display: 'grid', gap: '6px' } }, l.map((x) => el('label', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px', opacity: x.zrobione ? 0.5 : 1 } },
         el('input', { type: 'checkbox', checked: x.zrobione, onchange: (e) => { x.zrobione = e.target.checked; zapiszAppleListe(l); rysuj(); } }),
-        el('span', { style: { flex: 1, minWidth: 0 } }, el('b', {}, x.t), ' · ' + x.a),
+        przyciskFragmentu(x), el('span', { style: { flex: 1, minWidth: 0 } }, el('b', {}, x.t), ' · ' + x.a),
         el('a', { class: 'chip', href: appleLink(x), target: '_blank', rel: 'noopener' }, 'Apple Music')))),
       el('div', { class: 'wiersz', style: { marginTop: '8px' } },
         el('button', { class: 'przycisk drugi maly', onclick: () => { zapiszAppleListe(l.filter((x) => !x.zrobione)); rysuj(); } }, 'Usuń odhaczone'),
@@ -141,7 +141,7 @@ BIURO_WIDOKI.spotkanie = (box, s) => serwerP('kandydaciSpotkania', s.mojaStacja)
   };
   const karty = r.kandydaci.map((x) => {
     const w = el('div', { class: 'karta', style: { padding: '12px' } },
-      el('div', { class: 'wiersz', style: { justifyContent: 'space-between' } }, utworKomorka(x), przyciskFragmentu(x)),
+      el('div', { class: 'wiersz', style: { justifyContent: 'space-between' } }, utworKomorka(x)),
       el('p', { class: 'sub', style: { margin: '6px 0' } }, [x.powody.join(' · '), x.l ? 'czas ' + Math.floor(x.l / 60) + ':' + String(Math.round(x.l % 60)).padStart(2, '0') : null, x.bpm ? Math.round(x.bpm) + ' BPM' : null, x.y ? 'rok ' + x.y : null, fmt(x.n) + ' emisji w bazie'].filter(Boolean).join(' · ')),
       x.stacje.length ? el('p', { class: 'sub' }, 'Grają: ' + x.stacje.slice(0, 8).map((p) => p.nazwa + ' (od ' + dataPL(p.od, false) + ')').join(', ') + (x.stacje.length > 8 ? '…' : '')) : null,
       el('div', { class: 'wiersz', style: { marginTop: '8px' } }));
@@ -151,7 +151,7 @@ BIURO_WIDOKI.spotkanie = (box, s) => serwerP('kandydaciSpotkania', s.mojaStacja)
   });
   box.replaceChildren(karta('Kandydaci do dodania – ' + r.nazwa, `Utwory, których stacja jeszcze nie grała: debiuty na ≥ 3 stacjach (30 dni), polskie nowości (90 dni), utwory rosnące na stacjach o podobnym formacie (${r.podobne.join(', ') || 'brak danych'}). Decyzje „Dodaj” i „Odrzuć” chowają utwór; „Wróć za tydzień” – na 7 dni.`,
     karty.length ? el('div', { style: { display: 'grid', gap: '8px' } }, karty) : el('p', { class: 'opis' }, 'Brak kandydatów.')),
-  karta('Historia decyzji', null, tabela([['Kiedy', (x) => new Date(x.kiedy).toLocaleDateString('pl-PL'), 'num'], ['Utwór', (x) => (x.a || '') + ' – ' + (x.t || x.k)], ['Decyzja', (x) => ({ dodaj: 'dodaj', odrzuc: 'odrzuć', wroc: 'wróć', usun: 'cofnięta' })[x.stan] || x.stan], ['Notatka', (x) => x.notatka || '', 'tylko-szeroki']],
+  karta('Historia decyzji', null, tabela([['Kiedy', (x) => new Date(x.kiedy).toLocaleDateString('pl-PL'), 'num'], ['Utwór', (x) => (x.a && x.t ? utworKomorka(x) : (x.a || '') + ' – ' + (x.t || x.k)), null, (x) => (x.a || '') + ' – ' + (x.t || x.k)], ['Decyzja', (x) => ({ dodaj: 'dodaj', odrzuc: 'odrzuć', wroc: 'wróć', usun: 'cofnięta' })[x.stan] || x.stan], ['Notatka', (x) => x.notatka || '', 'tylko-szeroki']],
     r.historia, { nazwaEksportu: 'Decyzje spotkań', limit: 20, pusta: 'Jeszcze nie ma decyzji.' })), kartaAppleListy());
 }).catch(blB(box));
 
@@ -332,7 +332,7 @@ BIURO_WIDOKI.ankieta = (box) => serwerP('ankiety').then((d) => {
   const od = el('input', { type: 'number', min: 0, max: 600, placeholder: 'start fragmentu YouTube (s)', style: { width: '14em' } });
   const lista = el('div', { style: { display: 'grid', gap: '4px' } }), wyniki = el('div');
   const rysujWybrane = () => lista.replaceChildren(...(wybrane.length ? wybrane.map((x, i) => el('div', { class: 'wiersz', style: { flexWrap: 'nowrap' } },
-    el('span', { style: { flex: 1, minWidth: 0 } }, (i + 1) + '. ', el('b', {}, x.t), ' · ' + x.a),
+    przyciskFragmentu(x), el('span', { style: { flex: 1, minWidth: 0 } }, (i + 1) + '. ', el('b', {}, x.t), ' · ' + x.a),
     el('button', { class: 'przycisk drugi maly', onclick: () => { wybrane.splice(i, 1); rysujWybrane(); } }, 'Usuń'))) : [el('p', { class: 'stan' }, 'Brak utworów – dodaj z wyszukiwarki albo z notowania (do 20).')]));
   const dodaj = (x) => { if (wybrane.length >= 20) return toast('Najwyżej 20 utworów'); if (!wybrane.some((y) => y.k === x.k)) wybrane.push({ k: x.k, a: x.a, t: x.t }); rysujWybrane(); };
   const q = el('input', { type: 'search', placeholder: 'szukaj utworu…', style: { flex: 1, minWidth: '10em' } });
@@ -360,7 +360,7 @@ BIURO_WIDOKI.ankieta = (box) => serwerP('ankiety').then((d) => {
     if (w.blad) return toast(w.blad);
     const cel = document.getElementById('ankietaWyniki');
     cel.replaceChildren(karta('Wyniki: ' + w.tytul, `${fmt(w.odpowiedzi)} odpowiedzi` + (w.czekaNaScalenie ? `, ${fmt(w.czekaNaScalenie)} czeka na scalenie (przy najbliższym przeliczaniu)` : '') + '. Wskaźnik = % ocen 4–5 minus % „mam dość” wśród znających (definicja Music Base). Przy małej liczbie odpowiedzi różnice mogą być przypadkowe.',
-      tabela([['Utwór', (x) => el('span', {}, el('b', {}, x.t), ' · ' + x.a)], ['Znajomość', (x) => x.znajomosc == null ? '–' : fmt(x.znajomosc, 1) + '%', 'num'], ['Sympatia', (x) => x.sympatia == null ? '–' : fmt(x.sympatia, 2), 'num'],
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Znajomość', (x) => x.znajomosc == null ? '–' : fmt(x.znajomosc, 1) + '%', 'num'], ['Sympatia', (x) => x.sympatia == null ? '–' : fmt(x.sympatia, 2), 'num'],
         ['4–5', (x) => x.pozytywne == null ? '–' : fmt(x.pozytywne, 1) + '%', 'num'], ['Mam dość', (x) => x.zmeczenie == null ? '–' : fmt(x.zmeczenie, 1) + '%', 'num'], ['Wskaźnik', (x) => x.wskaznik == null ? '–' : fmt(x.wskaznik, 1), 'num'], ['Ocen', (x) => fmt(x.ocen), 'num']],
       w.utwory.slice().sort((a, b) => (b.wskaznik ?? -999) - (a.wskaznik ?? -999)), { pusta: 'Brak utworów.' })));
     cel.scrollIntoView({ behavior: 'smooth' });

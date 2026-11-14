@@ -21,11 +21,11 @@
 
   // ---- pamięć wyników (localStorage) – jak w Songsterze: 30 dni dla trafień, 3 dni dla „brak fragmentu” ----
   const TTL = 30 * 864e5;
-  const TTL_BRAK = 3 * 864e5;
-  const KLUCZ = 'mbs-fragmenty-v2';   // v2 (12.11.2026): numer utworu, czas, płyta – stare wpisy bez tych pól
+  const TTL_BRAK = 1 * 864e5;   // 14.11.2026: z 3 dni – brak bywa chwilowy
+  const KLUCZ = 'mbs-fragmenty-v3';   // v3 (14.11.2026): Deezer i nowe warianty zapytań – stare „brak fragmentu” od nowa
   const pamiec = new Map();
   let zapisane = {};
-  try { zapisane = JSON.parse(localStorage.getItem(KLUCZ) || '{}'); localStorage.removeItem('mbs-fragmenty-v1'); } catch (e) { zapisane = {}; }
+  try { zapisane = JSON.parse(localStorage.getItem(KLUCZ) || '{}'); localStorage.removeItem('mbs-fragmenty-v1'); localStorage.removeItem('mbs-fragmenty-v2'); } catch (e) { zapisane = {}; }
   function zapamietaj(k, wynik) {
     zapisane[k] = { d: Date.now(), r: wynik };
     try { localStorage.setItem(KLUCZ, JSON.stringify(zapisane)); } catch (e) { /* brak miejsca lub tryb prywatny */ }
@@ -61,41 +61,101 @@
     return null;
   }
 
-  // Zwraca { url, art, link, ex } albo null, gdy iTunes nie ma pasującego nagrania.
+  // ---- warianty zapytania (14.11.2026: część utworów nie miała fragmentu, choć iTunes/Deezer go mają) ----
+  // Radio zapisuje gości różnie: „A x B”, „A, B”, „A ft. B”, „A feat B”, „A + B”, „A vs B”. SongMatch dzieli tylko
+  // „ & ” i „ feat. ”, więc pytamy też samym głównym wykonawcą; tytuł – także bez dopisków w nawiasach i po myślniku.
+  const SEP_GOSCI = /\s+(?:x|×|feat\.?|ft\.?|featuring|vs\.?|\+)\s+|\s*,\s+/i;
+  const bezDopiskow = (t) => String(t || '').replace(/\s*[([].*?[)\]]/g, '').replace(/\s+[-–]\s+.*$/, '').trim() || String(t || '');
+  function warianty(utwor) {
+    const s1 = doSongMatch(utwor), glowny = String(s1.a || '').split(SEP_GOSCI)[0].trim();
+    const lista = [s1];
+    const s2 = Object.assign({}, s1, { a: glowny, t: bezDopiskow(s1.t) });
+    if (s2.a !== s1.a || s2.t !== s1.t) lista.push(s2);
+    return lista;
+  }
+  function zItunes(hit, country) {
+    return {
+      zr: 'itunes', url: hit.previewUrl,
+      art: (hit.artworkUrl100 || '').replace('100x100', '300x300'),
+      link: hit.trackViewUrl,
+      ex: hit.trackExplicitness === 'explicit' ? 1 : 0,
+      album: hit.collectionName || null,
+      wydanie: (hit.releaseDate || '').slice(0, 10) || null,
+      gatunek: hit.primaryGenreName || null,
+      duza: (hit.artworkUrl100 || '').replace('100x100', '600x600'),
+      // dane do karty „Dane utworu” (iTunes Search API)
+      nr: hit.trackNumber || null, zIlu: hit.trackCount || null, plyta: hit.discNumber || null, plyt: hit.discCount || null,
+      czas: hit.trackTimeMillis || null, wykAlbumu: hit.collectionArtistName || null, albumLink: hit.collectionViewUrl || null,
+      kraj: country,
+    };
+  }
+
+  // ---- Deezer (drugie źródło fragmentów): API przez JSONP (parametr output=jsonp), bez klucza ----
+  // Adres fragmentu z Deezera jest podpisany i ważny ok. godziny (parametr exp) – przed odtworzeniem odświeżamy go po id utworu.
+  let nrJsonp = 0;
+  function jsonp(url) {
+    return new Promise((ok, zle) => {
+      const nazwa = '__mbDeezer' + (++nrJsonp), s = document.createElement('script');
+      const koniec = () => { delete root[nazwa]; s.remove(); clearTimeout(t); };
+      const t = setTimeout(() => { koniec(); zle(new Error('Deezer nie odpowiada')); }, 9000);
+      root[nazwa] = (d) => { koniec(); ok(d); };
+      s.onerror = () => { koniec(); zle(new Error('Deezer niedostępny')); };
+      s.src = url + (url.includes('?') ? '&' : '?') + 'output=jsonp&callback=' + nazwa;
+      document.head.append(s);
+    });
+  }
+  function zDeezera(x) {
+    const al = x.album || {};
+    return { zr: 'deezer', dz: x.id, url: x.preview, t: Date.now(), art: al.cover_medium || null, duza: al.cover_big || al.cover_xl || null,
+      link: x.link || null, ex: x.explicit_lyrics ? 1 : 0, album: al.title || null, czas: x.duration ? x.duration * 1000 : null };
+  }
+  async function deezer(lista) {
+    for (const song of lista) {
+      const q = `${SongMatch.mainArtist(song)} ${song.t}`;
+      let d;
+      try { d = await jsonp('https:\/\/api.deezer.com/search?' + new URLSearchParams({ q, limit: '25' })); } catch (e) { return { blad: true }; }
+      // ten sam dobór nagrania co dla iTunes (wykonawca dokładnie, tytuł bez wersji live/remix itd.)
+      const jak = (d.data || []).map((x) => ({ previewUrl: x.preview, artistName: (x.artist || {}).name || '', trackName: x.title || '', collectionName: (x.album || {}).title || '', _x: x }));
+      for (const s of lista) {
+        const hit = SongMatch.pickPreview(jak, s);
+        if (hit) return { wynik: zDeezera(hit._x) };
+      }
+    }
+    return { wynik: null };
+  }
+  async function odswiezDeezer(f) {
+    if (!f || f.zr !== 'deezer' || Date.now() - (f.t || 0) < 40 * 60000) return f;
+    try { const x = await jsonp('https:\/\/api.deezer.com/track/' + f.dz); if (x && x.preview) return Object.assign({}, f, { url: x.preview, t: Date.now() }); } catch (e) { /* zostaje stary adres */ }
+    return f;
+  }
+
+  // Zwraca { url, art, link, ex, zr } albo null, gdy ani iTunes, ani Deezer nie mają pasującego nagrania.
   async function znajdzFragment(utwor) {
     const song = doSongMatch(utwor);
     const k = `${SongMatch.norm(song.a)}|${SongMatch.norm(song.t)}`;
-    if (pamiec.has(k)) return pamiec.get(k);
+    if (pamiec.has(k)) { const f = await odswiezDeezer(pamiec.get(k)); pamiec.set(k, f); return f; }
     const z = zapisane[k];
-    if (z && Date.now() - z.d < (z.r ? TTL : TTL_BRAK)) { pamiec.set(k, z.r); return z.r; }
-    const term = song.q || `${SongMatch.mainArtist(song)} ${song.t}`;
-    let wynik = null;
-    let bladSieci = false;
-    for (const country of ['PL', 'US']) {
-      const url = 'https:\/\/itunes.apple.com/search?' + new URLSearchParams({ term, entity: 'song', limit: '25', country });
-      const res = await pobierz(url);
-      if (!res) { bladSieci = true; continue; }
-      const dane = await res.json();
-      const hit = SongMatch.pickPreview(dane.results || [], song);
-      if (hit) {
-        wynik = {
-          url: hit.previewUrl,
-          art: (hit.artworkUrl100 || '').replace('100x100', '300x300'),
-          link: hit.trackViewUrl,
-          ex: hit.trackExplicitness === 'explicit' ? 1 : 0,
-          album: hit.collectionName || null,
-          wydanie: (hit.releaseDate || '').slice(0, 10) || null,
-          gatunek: hit.primaryGenreName || null,
-          duza: (hit.artworkUrl100 || '').replace('100x100', '600x600'),
-          // dane do karty „Dane utworu” (iTunes Search API)
-          nr: hit.trackNumber || null, zIlu: hit.trackCount || null, plyta: hit.discNumber || null, plyt: hit.discCount || null,
-          czas: hit.trackTimeMillis || null, wykAlbumu: hit.collectionArtistName || null, albumLink: hit.collectionViewUrl || null,
-          kraj: country,
-        };
-        break;
+    if (z && Date.now() - z.d < (z.r ? TTL : TTL_BRAK)) { const f = await odswiezDeezer(z.r); pamiec.set(k, f); return f; }
+    const lista = warianty(utwor);
+    let wynik = null, bladSieci = false;
+    const terminy = [...new Set([song.q || `${SongMatch.mainArtist(song)} ${song.t}`].concat(lista.slice(1).map((s) => `${SongMatch.mainArtist(s)} ${s.t}`)))];
+    szukaj: for (const term of terminy) {
+      for (const country of ['PL', 'US']) {
+        const url = 'https:\/\/itunes.apple.com/search?' + new URLSearchParams({ term, entity: 'song', limit: '25', country });
+        const res = await pobierz(url);
+        if (!res) { bladSieci = true; continue; }
+        const dane = await res.json();
+        for (const s of lista) {
+          const hit = SongMatch.pickPreview(dane.results || [], s);
+          if (hit) { wynik = zItunes(hit, country); break szukaj; }
+        }
       }
     }
-    // „brak fragmentu” zapamiętujemy tylko, gdy iTunes faktycznie odpowiedział
+    if (!wynik && typeof document !== 'undefined') {
+      const d = await deezer(lista);
+      if (d.blad) bladSieci = true; else wynik = d.wynik;
+    }
+    // „brak fragmentu” zapamiętujemy tylko, gdy oba serwisy faktycznie odpowiedziały
     if (wynik || !bladSieci) { pamiec.set(k, wynik); zapamietaj(k, wynik); }
     return wynik;
   }
@@ -107,7 +167,7 @@
     const song = doSongMatch(utwor);
     const q = encodeURIComponent(`${SongMatch.mainArtist(song)} ${song.t}`);
     if (serwis === 'spotify') return song.sp ? `https:\/\/open.spotify.com/track/${song.sp}` : `https:\/\/open.spotify.com/search/${q}`;
-    if (serwis === 'apple') return fragment && fragment.link ? fragment.link : `https:\/\/music.apple.com/search?term=${q}`;
+    if (serwis === 'apple') return fragment && fragment.link && fragment.zr !== 'deezer' ? fragment.link : `https:\/\/music.apple.com/search?term=${q}`;
     return utwor.yt ? `https:\/\/www.youtube.com/watch?v=${utwor.yt}` : `https:\/\/www.youtube.com/results?search_query=${q}`;
   }
 
@@ -168,7 +228,7 @@
 
     znajdzFragment(utwor).then((f) => {
       if (!f) {
-        status.textContent = 'Brak fragmentu w Apple Music – posłuchaj w serwisach obok';
+        status.textContent = 'Brak fragmentu w Apple Music i Deezerze – posłuchaj w serwisach obok';
         box.classList.add('brak');
         return;
       }
@@ -176,7 +236,7 @@
       audio.src = f.url;
       if (f.art) okladka.style.backgroundImage = `url("${f.art}")`;
       linki.querySelector('[data-serwis="apple"]').href = linkDo(utwor, f, 'apple');
-      status.textContent = f.ex ? 'Fragment 30 s · tekst oznaczony jako explicit' : 'Fragment 30 s';
+      status.textContent = (f.zr === 'deezer' ? 'Fragment 30 s (Deezer)' : 'Fragment 30 s') + (f.ex ? ' · tekst oznaczony jako explicit' : '');
       przycisk.disabled = false;
     }).catch(() => { status.textContent = 'Nie udało się wyszukać fragmentu'; box.classList.add('brak'); });
 

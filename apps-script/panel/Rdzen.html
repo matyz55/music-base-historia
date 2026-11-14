@@ -383,11 +383,13 @@ function wyborStacji(aktualne, gotowe, { max = 99, tytul = 'Wybierz stacje' } = 
 function kafle(lista) {
   return el('div', { class: 'kafle' }, lista.filter(Boolean).map(([e, w, p]) => el('div', { class: 'kafel' }, el('div', { class: 'e' }, e), el('div', { class: 'w' }, w), el('div', { class: 'p' }, p || ''))));
 }
+/** Komórka utworu w każdej liście: przycisk odsłuchu 30-s fragmentu + tytuł, wykonawca, znaczniki (14.11.2026). */
 function utworKomorka(x) {
-  return el('span', { class: 'utw' }, el('b', {}, x.t), ' ', el('span', { class: 'wyk' }, '· ' + x.a),
+  const opis = el('span', { class: 'utw-t' }, el('b', {}, x.t), ' ', el('span', { class: 'wyk' }, '· ' + x.a),
     x.y ? el('span', { class: 'znacznik', title: 'Rok wydania' + (x.z ? ' (' + x.z + ')' : '') }, String(x.y)) : null,
     x.c === 'PL' ? el('span', { class: 'znacznik', title: 'Polski wykonawca' }, 'PL') : null,
     znacznikWulg(x.w));
+  return el('span', { class: 'utw z-graj' }, x.t && x.a ? przyciskFragmentu(x) : null, opis);
 }
 /** Utwór z wulgaryzmami w tekście (pole w z lrclib.net, scraper/wulgaryzmy.py): 2 – do ocenzurowania, 1 – do rozważenia. */
 function znacznikWulg(w) {
@@ -596,7 +598,7 @@ function mapaCieplna(hw, opisWartosci = (v) => fmt(v)) {
   box.addEventListener('click', (e) => { const k = e.target.closest('.k'); if (k && k.title) toast(k.title, 3000); });
   return el('div', {}, box, legendaSkali(0, max, opisWartosci));
 }
-/** R2: przycisk odsłuchu 30-s fragmentu (iTunes) w wierszu listy; jeden fragment naraz, ponowne dotknięcie zatrzymuje. */
+/** R2: przycisk odsłuchu 30-s fragmentu (iTunes, a gdy go brak – Deezer) w wierszu listy; jeden fragment naraz, ponowne dotknięcie zatrzymuje. */
 let fragmentAudio = null, fragmentPrzycisk = null;
 function przyciskFragmentu(x) {
   const b = el('button', { class: 'ikona-btn fragment-btn', title: 'Posłuchaj 30 s', 'aria-label': 'Posłuchaj fragmentu: ' + x.a + ' – ' + x.t, html: svgIkona(IK.graj, 'width="14" height="14"') });
@@ -605,9 +607,9 @@ function przyciskFragmentu(x) {
     if (fragmentPrzycisk === b && fragmentAudio && !fragmentAudio.paused) { fragmentAudio.pause(); b.innerHTML = svgIkona(IK.graj, 'width="14" height="14"'); return; }
     if (fragmentAudio) { fragmentAudio.pause(); if (fragmentPrzycisk) fragmentPrzycisk.innerHTML = svgIkona(IK.graj, 'width="14" height="14"'); }
     b.disabled = true;
-    Odsluch.znajdzFragment({ a: x.a, t: x.t }).then((f) => {
+    Odsluch.znajdzFragment({ a: x.a, t: x.t, y: x.y || undefined }).then((f) => {
       b.disabled = false;
-      if (!f || !f.url) { toast('Brak fragmentu tego utworu w iTunes'); return; }
+      if (!f || !f.url) { b.classList.add('brak'); b.title = 'Brak fragmentu w Apple Music i Deezerze'; toast('Brak fragmentu tego utworu w Apple Music i Deezerze'); return; }
       fragmentAudio = fragmentAudio || new Audio();
       fragmentAudio.src = f.url; fragmentAudio.play().catch(() => toast('Nie udało się odtworzyć fragmentu'));
       fragmentPrzycisk = b; b.innerHTML = svgIkona(IK.pauza, 'width="14" height="14"');

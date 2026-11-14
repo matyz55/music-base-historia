@@ -85,7 +85,7 @@ function rysujUtwor(box, k, p) {
       karta('Podobne utwory', 'Grane w podobnych proporcjach na tych samych stacjach (rok ' + (p.lata[p.lata.length - 1] || '–') + ').', kPodobne),
       karta('Inne wersje i utwory wykonawcy', null,
         p.wersje.length ? el('div', {}, el('h3', {}, 'Inne wersje (remiksy, wersje radiowe, na żywo)'), tabela([['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num']], p.wersje, { klik: (x) => idz('utwor', x.k) })) : el('p', { class: 'opis' }, 'Brak innych wersji tego tytułu w bazie.'),
-        p.inneUtwory.length ? el('div', { style: { marginTop: '10px' } }, el('h3', {}, 'Najczęściej grane utwory wykonawcy'), tabela([['Tytuł', (x) => x.t], ['Emisje', (x) => fmt(x.n), 'num']], p.inneUtwory, { klik: (x) => idz('utwor', x.k) })) : null)),
+        p.inneUtwory.length ? el('div', { style: { marginTop: '10px' } }, el('h3', {}, 'Najczęściej grane utwory wykonawcy'), tabela([['Tytuł', (x) => el('span', { class: 'utw z-graj' }, przyciskFragmentu({ a: p.a, t: x.t }), el('span', { class: 'utw-t' }, x.t)), null, (x) => x.t], ['Emisje', (x) => fmt(x.n), 'num']], p.inneUtwory, { klik: (x) => idz('utwor', x.k) })) : null)),
     el('div', { class: 'siatka2' }, karta('Tekst', 'Z lrclib.net (otwarta baza tekstów), na żądanie.', kTekst), karta('Moje', 'Tagi i notatka widoczne tylko dla Ciebie.', kMoje)));
 
   // ---- wszystkie emisje: rok po roku, równolegle ----
