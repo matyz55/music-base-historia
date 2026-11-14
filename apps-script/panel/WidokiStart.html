@@ -1,0 +1,868 @@
+<script>
+'use strict';
+// ======================= Widoki: start, ranking, szukaj, stacje, profil stacji, porównanie =======================
+
+// ---------------- START (G1, G3–G8) ----------------
+let zegarStartu = null;
+WIDOKI.start = (box) => {
+  clearInterval(zegarStartu);
+  const ulub = (S.moje.ulubioneStacje || []).filter((id) => S.jedn[id]);
+  const terazStacje = (ulub.length ? ulub : S.start.jednostki.filter((j) => j.ostatni === S.start.do).slice(0, 6).map((j) => j.id)).slice(0, 12);
+  const kTeraz = el('div', { class: 'teraz-kafle' }, szkielet(1));
+  const sekcjaTeraz = karta('Teraz na antenie', ulub.length ? 'Twoje ulubione stacje · odświeżane co 2 minuty' : 'Dodaj ulubione stacje (gwiazdka w profilu stacji), żeby widzieć tu swoje. Odświeżane co 2 minuty.', kTeraz);
+  const kWsch = el('div', {}, szkielet(1)), kDeb = el('div', {}, szkielet(1)), kPuls = el('div', { class: 'wykres' }), kAlerty = el('div'), kStan = el('div');
+  const kTegoDnia = el('div');
+  const kDzis = el('div', {}, szkielet(1));
+  // S1: karty Startu do zwinięcia i ułożenia (zapamiętane w przeglądarce)
+  const KARTY_STARTU = {
+    teraz: ['Teraz na antenie', () => sekcjaTeraz],
+    dzis: ['Dziś na Twoich stacjach', () => karta('Dziś na Twoich stacjach', 'Dzisiejsze emisje ulubionych stacji (aktualizacja co godzinę).', kDzis)],
+    wsch: ['Wschodzące i debiuty', () => el('div', { class: 'siatka2' }, karta('Wschodzące', 'Największy wzrost emisji: ostatnie 7 dób wobec 7 poprzednich, całe radio.', kWsch), karta('Debiuty', 'Utwory zagrane pierwszy raz w całej bazie w ostatnich 7 dobach.', kDeb))],
+    puls: ['Puls radia i alerty', () => el('div', { class: 'siatka2' }, karta('Puls radia', 'Emisje utworów na dobę, wszystkie stacje, ostatnie 28 dób.', kPuls), karta('Ostatnie alerty', null, kAlerty))],
+    tegodnia: ['Tego dnia lata temu', () => karta('Tego dnia lata temu', 'Najczęściej grane w wybranym okresie w poprzednich latach. Wybierz datę, długość okresu i lata.', kTegoDnia)],
+    stan: ['Stan danych', () => karta('Stan danych', null, kStan)],
+  };
+  const uklad = ukladStartu(Object.keys(KARTY_STARTU));
+  if (uklad.some((x) => x.id === 'teraz' && x.ukryta)) terazStacje.splice(0);   // ukryta karta – bez zapytań na żywo
+  box.replaceChildren(
+    el('div', { class: 'wiersz', style: { justifyContent: 'space-between', alignItems: 'flex-end' } },
+      el('div', {}, el('h1', {}, 'Dzień dobry'), el('p', { class: 'opis', style: { marginTop: '4px' } }, `Dane z ${S.start.jednostki.length} stacji, ${dataPL(S.start.od)} – ${dataPL(S.start.do)}.`)),
+      el('button', { class: 'przycisk drugi maly', onclick: () => dostosujStart(KARTY_STARTU) }, 'Dostosuj')),
+    kartaZapisanychWidokow(),
+    ...uklad.filter((x) => !x.ukryta && KARTY_STARTU[x.id]).map((x) => KARTY_STARTU[x.id][1]()));
+  // S2: dziś na ulubionych stacjach
+  if (uklad.some((x) => x.id === 'dzis' && !x.ukryta)) serwerP('dzisNaStacjach', ulub).then((r) => {
+    if (!r.emisji) { kDzis.replaceChildren(el('p', { class: 'opis' }, ulub.length ? 'Dziś jeszcze brak emisji z ulubionych stacji.' : 'Dodaj ulubione stacje (gwiazdka w profilu stacji).')); return; }
+    kDzis.replaceChildren(kafle([['Emisji dziś', fmt(r.emisji), (r.stacje || []).length + ' stacji'], ['Różnych utworów', fmt(r.utworow), ''],
+      ['Polscy wykonawcy', r.udzialPL == null ? '–' : proc(r.udzialPL), r.pokrycie ? 'znany kraj: ' + proc(r.pokrycie) : 'brak danych o kraju'], ['Nowe w bazie', r.nowe ? fmt(r.nowe.length) : '–', r.nowe ? 'pierwszy raz dziś' : 'po przeliczeniu indeksu']]),
+      el('div', { class: 'siatka2', style: { marginTop: '10px' } },
+        el('div', {}, el('h3', {}, 'Najczęściej dziś'), tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num'], ['Stacji', (x) => fmt(x.stacji), 'num tylko-szeroki']], r.top, { limit: 10, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Dziś na ulubionych ' + r.data })),
+        el('div', {}, el('h3', {}, 'Pierwszy raz w bazie'), tabela([['Utwór', utworKomorka], ['Godz.', (x) => x.g, 'num'], ['Stacja', (x) => nazwa(x.s), 'tylko-szeroki']], r.nowe || [], { limit: 10, klik: (x) => idz('utwor', x.k), pusta: r.nowe ? 'Dziś nic nowego.' : 'Lista pojawi się po najbliższym przeliczeniu indeksu utworów w Odbiorniku.' }))));
+  }).catch((e) => kDzis.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  // ramówki ulubionych (jedno zapytanie, serwer trzyma je godzinę) → bieżąca audycja na kafelku
+  let ramowkiTeraz = {};
+  const zRamowka = terazStacje.filter((id) => maRamowke(id));
+  if (zRamowka.length) serwerP('ramowka', dzisISO(), zRamowka).then((r) => { ramowkiTeraz = r.stacje || {}; if (S.widok === 'start') rysujTeraz(); }).catch(() => {});
+  const minuty = (iso) => Date.parse(iso + ':00');
+  const teraziso = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
+  function audycjaTeraz(id) {
+    const l = Array.isArray(ramowkiTeraz[id]) ? ramowkiTeraz[id] : [], c = teraziso();
+    const trwa = l.filter((x) => x.od <= c && x.do > c);
+    if (!trwa.length) return null;
+    // dłuższa audycja wygrywa z krótkim serwisem w jej trakcie (jak w ramówce)
+    const glowna = trwa.filter((x) => minuty(x.do) - minuty(x.od) > 30 * 6e4).sort((x, y) => (minuty(x.do) - minuty(x.od)) - (minuty(y.do) - minuty(y.od)))[0] || trwa[trwa.length - 1];
+    const wstawka = trwa.find((x) => x !== glowna && minuty(x.do) - minuty(x.od) <= 30 * 6e4);
+    const nast = l.filter((x) => x.od >= glowna.do && x.tytul !== glowna.tytul && minuty(x.do) - minuty(x.od) > 12 * 6e4)[0] || null;
+    return { a: glowna, wstawka, nast, postep: Math.min(1, Math.max(0, (Date.now() - minuty(glowna.od)) / (minuty(glowna.do) - minuty(glowna.od)))) };
+  }
+  const minutTemu = (g) => {
+    if (!g) return null;
+    const [h, m] = g.split(':').map(Number), d = new Date(), r = d.getHours() * 60 + d.getMinutes() - (h * 60 + m);
+    return r < 0 ? r + 1440 : r;
+  };
+  // kafle „Teraz na antenie”: każda stacja osobnym zapytaniem – kafel pojawia się, gdy jego źródło odpowie (F3).
+  // Audycja (ikona mikrofonu, ramka) i muzyka (ikona nuty, lista utworów) w osobnych, wyraźnie różnych blokach.
+  const daneTeraz = {}, kafleTeraz = {};
+  const ikonka = (ik) => el('span', { class: 'tk-ik', html: svgIkona(ik, 'width="14" height="14"') });
+  function kafelTeraz(id) {
+    const s = daneTeraz[id], gra = Odtwarzacz.stacja, au = audycjaTeraz(id);
+    const u = (s && s.utwory) || [], temu = u.length ? minutTemu(u[0].g) : null;
+    const stary = temu != null && temu > 12;   // od ostatniego utworu minęło sporo – pewnie rozmowa / serwis
+    const muzyka = !s ? el('div', { class: 'ladowanie', style: { height: '64px' } })
+      : s.blad ? el('p', { class: 'sub' }, 'Brak danych na żywo (' + s.blad + ')')
+      : !u.length ? el('p', { class: 'sub' }, 'Brak utworów w ostatnich godzinach')
+      : el('div', { class: 'tk-muz' + (stary ? ' stary' : '') },
+        el('div', { class: 'tk-aud-g' }, el('span', { class: 'tk-etyk' }, ikonka(IK.nuta), stary ? 'Ostatni utwór' : 'Teraz gra'),
+          el('span', { class: 'tk-czas' }, u[0].g + (stary && temu < 360 ? ' · ' + (temu < 60 ? temu + ' min' : Math.floor(temu / 60) + ' h ' + (temu % 60) + ' min') + ' temu' : ''))),
+        el('button', { class: 'utw-teraz', onclick: () => idz('utwor', u[0].k) }, el('b', {}, u[0].t), el('span', {}, u[0].a)),
+        u.slice(1, 3).map((x) => el('button', { class: 'tk-wczesniej', title: 'Wcześniej (' + x.g + '): ' + x.a + ' – ' + x.t, onclick: () => idz('utwor', x.k) },
+          el('span', { class: 'tk-czas' }, x.g), el('span', { class: 'tk-ww' }, x.t), el('span', { class: 'tk-wa' }, x.a))));
+    return el('div', { class: 'teraz-kafel kst' + (gra === id ? ' gra' : ''), style: kolorStacji(id) ? { '--kst': kolorStacji(id) } : {} },
+      el('div', { class: 'g' },
+        el('button', { class: 'st', title: 'Profil stacji', onclick: () => idz('stacja', id) }, logo(id), el('span', {}, nazwa(id))),
+        Odtwarzacz.maStrumien(id) ? el('button', { class: 'ikona-btn tk-graj', title: gra === id ? 'Gra teraz' : 'Słuchaj', 'aria-label': 'Słuchaj ' + nazwa(id), html: svgIkona(IK.graj), onclick: () => Odtwarzacz.graj(id) }) : null),
+      au ? el('div', { class: 'tk-aud', title: [au.a.tytul, au.a.prowadzacy].filter(Boolean).join(' · ') },
+        el('div', { class: 'tk-aud-g' }, el('span', { class: 'tk-etyk' }, ikonka(IK.mikrofon), 'Audycja'), el('span', { class: 'tk-czas' }, au.a.od.slice(11) + '–' + au.a.do.slice(11))),
+        el('div', { class: 'tk-aud-t' }, au.a.tytul),
+        au.a.prowadzacy ? el('div', { class: 'tk-aud-p' }, au.a.prowadzacy) : null,
+        el('div', { class: 'tk-postep' }, el('i', { style: { width: Math.round(au.postep * 100) + '%' } })),
+        au.wstawka ? el('div', { class: 'tk-aud-p' }, 'teraz w trakcie: ' + au.wstawka.tytul) : null,
+        au.nast ? el('div', { class: 'tk-nast' }, el('span', { class: 'tk-czas' }, 'Potem ' + au.nast.od.slice(11)), ' ' + au.nast.tytul) : null) : null,
+      muzyka);
+  }
+  function rysujTeraz() {
+    if (!kTeraz.isConnected && kTeraz.children.length) return;
+    terazStacje.forEach((id) => {
+      const nowy = kafelTeraz(id);
+      if (kafleTeraz[id] && kafleTeraz[id].isConnected) kafleTeraz[id].replaceWith(nowy); else kTeraz.append(nowy);
+      kafleTeraz[id] = nowy;
+    });
+  }
+  const odswiezTeraz = () => {
+    if (S.widok !== 'start') { clearInterval(zegarStartu); return; }
+    terazStacje.forEach((id) => serwer('teraz', [id]).then((w) => {
+      if (S.widok !== 'start') return;
+      daneTeraz[id] = (w.stacje || {})[id] || { utwory: [] };
+      const nowy = kafelTeraz(id);
+      if (kafleTeraz[id] && kafleTeraz[id].isConnected) kafleTeraz[id].replaceWith(nowy);
+      kafleTeraz[id] = nowy;
+    }).catch((e) => { daneTeraz[id] = { blad: e.message }; }));
+  };
+  kTeraz.replaceChildren();
+  rysujTeraz();
+  odswiezTeraz();
+  zegarStartu = setInterval(odswiezTeraz, 120000);
+  // F8: gdy Start się załaduje, a przeglądarka nic nie robi – po kolei ranking i profile 3 pierwszych ulubionych stacji
+  // do pamięci (następne dotknięcie otwiera je od razu); kolejno, nie naraz (limit równoczesnych wykonań Apps Script)
+  const wTle = window.requestIdleCallback || ((f) => setTimeout(f, 2500));
+  wTle(() => {
+    if (S.widok !== 'start') return;
+    const zadania = [() => serwerP('ranking', { jednostki: S.wybrane, od: S.od, do: S.do, preset: S.preset || null, porownanie: R.porownanie || 'poprzedni', typ: R.typ, rokOd: R.rokOd, rokDo: R.rokDo, kraj: R.kraj, limit: R.limit, tylkoUlubione: R.ulubione })]
+      .concat(ulub.slice(0, 3).map((id) => () => serwerP('profilJednostki', id, S.od, S.do)));
+    zadania.reduce((p, z) => p.then(() => (S.widok === 'start' ? z().catch(() => {}) : null)), new Promise((ok) => setTimeout(ok, 4000)));
+  });
+
+  serwerP('strona').then((s) => {
+    if (s.brakDanych) return;
+    kWsch.replaceChildren(tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num'], ['Zmiana', (x) => el('span', { class: 'zm w' }, '+' + fmt(x.wzrost)), 'num']],
+      s.wschodzace, { limit: 10, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Wschodzące ' + s.ostatni }));
+    kDeb.replaceChildren(tabela([['Utwór', utworKomorka], ['Pierwsza', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '6px' } }, x.pierwszaStacja ? logo(x.pierwszaStacja, 'm') : null, el('span', { class: 'sub' }, dataPL(x.pierwsza, false) + ' ' + x.pierwsza.slice(11, 16))), 'tylko-szeroki'],
+      ['Emisje', (x) => fmt(x.n), 'num'], ['Stacji', (x) => fmt(x.stacji), 'num']], s.debiuty, { limit: 10, klik: (x) => idz('utwor', x.k), pusta: 'W ostatnich 7 dobach nie było debiutów.' }));
+    slupki(kPuls, s.puls.map((p) => dataPL(p[0], false)), s.puls.map((p) => p[1]), { opis: (e, v) => `${e}: <b>${fmt(v)}</b> emisji` });
+    // zestawienia Startu liczy Odbiornik (plik strona.json.gz); zaraz po wdrożeniu jeszcze ich nie ma
+    if (s.przygotowanie) [kWsch, kDeb, kPuls].forEach((b) => b.replaceChildren(el('p', { class: 'opis' }, 'Zestawienie liczy się w Odbiorniku – pojawi się po najbliższym przeliczeniu (zwykle w ciągu godziny).')));
+    if (s.dzis && s.dzis.aktualizacja) kPuls.after(el('p', { class: 'sub', style: { marginTop: '6px' } }, 'Dziś do tej pory: ' + fmt(Object.values(s.dzis.godziny).reduce((a, b) => a + b, 0)) + ' emisji · ostatnia aktualizacja ' + new Date(s.dzis.aktualizacja).toLocaleTimeString('pl-PL', { hour: '2-digit', minute: '2-digit' })));
+    kAlerty.replaceChildren(s.alerty.length ? el('div', { style: { display: 'grid', gap: '6px' } }, s.alerty.map((a) => el('div', { style: { fontSize: '14px' } }, el('span', { class: 'sub' }, new Date(a.kiedy).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) + ' · '), a.tekst)))
+      : el('p', { class: 'opis' }, 'Brak trafień. Alerty ustawisz w zakładce „Alerty i ustawienia” albo w profilu utworu.'));
+    const st = s.stan;
+    kStan.replaceChildren(el('p', { class: 'opis' }, `Metadane (rok, kraj, język) ma ${fmt(st.metadanych)} utworów. ` + (st.diagnostyka ? `Diagnostyka plików: ${dataPL(st.diagnostyka)}, ${st.problemy.length ? 'problemy: ' + st.problemy.join('; ') : 'bez problemów'}.` : '')),
+      el('details', { style: { marginTop: '8px' } }, el('summary', {}, 'Zakres danych każdej stacji'),
+        tabela([['Stacja', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), x.nazwa)], ['Od', (x) => dataPL(x.pierwszy), 'num'], ['Do', (x) => dataPL(x.ostatni), 'num'], ['Dób', (x) => fmt(x.dob), 'num'], ['Źródło', (x) => x.zrodlo, 'tylko-szeroki']],
+          st.stacje, { klik: (x) => idz('stacja', siecStacjiK(x.id) || x.id), nazwaEksportu: 'Stan danych' })),
+      // O2: dziennik zadań GitHub Actions (raport na koniec każdego zadania)
+      (st.zadania || []).length ? el('details', { style: { marginTop: '8px' }, open: (st.zadania || []).some((z) => z.status !== 'success' || z.bledow) },
+        el('summary', {}, 'Zadania w GitHubie' + ((st.zadania || []).some((z) => z.status !== 'success' || z.bledow) ? ' – są problemy' : ' – w porządku')),
+        tabela([['Zadanie', (z) => z.zadanie], ['Ostatnio', (z) => new Date(z.kiedy).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }), 'num', (z) => z.kiedy],
+          ['Wynik', (z) => el('span', { class: z.status === 'success' && !z.bledow ? 'zm w' : 'zm s', title: (z.ostatnie || []).join('\n') }, z.status === 'success' && !z.bledow ? 'OK' : (z.status !== 'success' ? z.status : z.bledow + ' błędów')), null, (z) => z.status],
+          ['Udane', (z) => z.udanych + '/' + z.przebiegow, 'num tylko-szeroki'], ['', (z) => (z.url ? el('a', { href: z.url, target: '_blank', rel: 'noopener' }, 'dziennik') : ''), 'num']],
+        st.zadania, { nazwaEksportu: 'Zadania GitHub' })) : null);
+  }).catch((e) => kWsch.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  tegoDnia(kTegoDnia);
+};
+
+/** Kolejność i widoczność kart Startu (S1) – localStorage 'mb-start'. */
+function ukladStartu(domyslne) {
+  let z = [];
+  try { z = JSON.parse(localStorage.getItem('mb-start') || '[]') || []; } catch (e) { z = []; }
+  z = z.filter((x) => domyslne.includes(x.id));
+  domyslne.forEach((id) => { if (!z.some((x) => x.id === id)) z.push({ id, ukryta: false }); });
+  return z;
+}
+function dostosujStart(karty) {
+  let uklad = ukladStartu(Object.keys(karty));
+  const lista = el('div', { style: { display: 'grid', gap: '6px' } });
+  const zapisz = () => { try { localStorage.setItem('mb-start', JSON.stringify(uklad)); } catch (e) { /* bez pamięci */ } };
+  const rysuj = () => lista.replaceChildren(...uklad.map((x, i) => {
+    const cb = el('input', { type: 'checkbox', checked: !x.ukryta });
+    cb.addEventListener('change', () => { x.ukryta = !cb.checked; zapisz(); });
+    return el('div', { class: 'wiersz', style: { flexWrap: 'nowrap', justifyContent: 'space-between' } },
+      el('label', { class: 'wiersz', style: { flexWrap: 'nowrap', cursor: 'pointer' } }, cb, karty[x.id][0]),
+      el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '4px' } },
+        el('button', { class: 'ikona-btn', disabled: i === 0, 'aria-label': 'Wyżej', onclick: () => { [uklad[i - 1], uklad[i]] = [uklad[i], uklad[i - 1]]; zapisz(); rysuj(); } }, '↑'),
+        el('button', { class: 'ikona-btn', disabled: i === uklad.length - 1, 'aria-label': 'Niżej', onclick: () => { [uklad[i + 1], uklad[i]] = [uklad[i], uklad[i + 1]]; zapisz(); rysuj(); } }, '↓')));
+  }));
+  rysuj();
+  otworzArkusz(el('div', { style: { display: 'grid', gap: '10px' } }, el('h2', {}, 'Dostosuj Start'), el('p', { class: 'sub' }, 'Zaznacz widoczne karty i ustaw ich kolejność. Zapisywane w tej przeglądarce.'), lista,
+    el('div', { class: 'wiersz', style: { justifyContent: 'flex-end' } },
+      el('button', { class: 'przycisk drugi', onclick: () => { try { localStorage.removeItem('mb-start'); } catch (e) { /* bez pamięci */ } zamknijArkusz(); idz('start', null, true); } }, 'Domyślnie'),
+      el('button', { class: 'przycisk', onclick: () => { zamknijArkusz(); idz('start', null, true); } }, 'Gotowe'))));
+}
+
+const G7 = { data: null, okno: 1, lata: null };
+function tegoDnia(box) {
+  G7.data = G7.data || dzisISO();
+  const data = el('input', { type: 'date', value: G7.data, 'aria-label': 'Data odniesienia' });
+  const okno = el('select', { 'aria-label': 'Długość okresu' }, [[1, 'ta doba'], [3, '3 dni do tej daty'], [7, 'tydzień do tej daty'], [30, '30 dni do tej daty']].map(([v, n]) => el('option', { value: v }, n)));
+  okno.value = G7.okno;
+  const lataBox = el('span', { class: 'wiersz' });
+  // tylko lata, z których są dane (od pierwszej doby w bazie); domyślnie 1–3 lata (wcześniej 5 i 10 lat – zawsze puste)
+  const maxLat = Math.max(1, Math.floor((Date.parse(dzisISO()) - Date.parse(S.start.od)) / (365.25 * 864e5)));
+  if (!G7.lata) G7.lata = [1, 2, 3].filter((l) => l <= maxLat);
+  const rysujLata = () => lataBox.replaceChildren(...[1, 2, 3, 4, 5, 10, 15].filter((l) => l <= maxLat).map((l) => el('button', { class: 'chip' + (G7.lata.includes(l) ? ' akt' : ''), onclick: () => { G7.lata = G7.lata.includes(l) ? G7.lata.filter((x) => x !== l) : G7.lata.concat(l).sort((a, b) => a - b); rysujLata(); licz(); } }, l + (l === 1 ? ' rok' : l < 5 ? ' lata' : ' lat'))));
+  const inne = el('input', { type: 'number', min: 1, max: maxLat, placeholder: 'inne', style: { width: '80px' }, 'aria-label': 'Inna liczba lat' });
+  inne.addEventListener('change', () => { const v = +inne.value; if (v > 0 && v <= maxLat && !G7.lata.includes(v)) { G7.lata = G7.lata.concat(v).sort((a, b) => a - b); rysujLata(); licz(); } inne.value = ''; });
+  const wynik = el('div', { class: 'siatka3', style: { marginTop: '12px' } });
+  const licz = () => {
+    G7.data = data.value; G7.okno = +okno.value;
+    if (!G7.lata.length) { wynik.replaceChildren(el('p', { class: 'opis' }, 'Wybierz co najmniej jeden rok wstecz.')); return; }
+    wynik.replaceChildren(...szkielet(Math.min(3, G7.lata.length)));
+    serwerP('tegoDnia', { data: G7.data, okno: G7.okno, lata: G7.lata, jednostki: S.wybrane }).then((r) => {
+      wynik.replaceChildren(...r.okresy.map((o) => el('div', {}, el('h3', {}, o.lat + (o.lat === 1 ? ' rok' : o.lat < 5 ? ' lata' : ' lat') + ' temu'),
+        el('p', { class: 'sub' }, (o.od === o.do ? dataPL(o.do) : dataPL(o.od) + ' – ' + dataPL(o.do)) + ' · ' + fmt(o.emisji) + ' emisji'),
+        o.top.length ? tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka], ['', (x) => fmt(x.n), 'num']], o.top, { limit: 10, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Tego dnia ' + o.lat + ' lat temu' }) : el('p', { class: 'opis' }, 'Brak danych z tego okresu.'))));
+    }).catch((e) => wynik.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  };
+  data.addEventListener('change', licz); okno.addEventListener('change', licz);
+  rysujLata();
+  box.replaceChildren(el('div', { class: 'wiersz' }, el('label', { class: 'sub' }, 'Data ', data), okno, el('span', { class: 'sub' }, 'lata wstecz:'), lataBox, inne,
+    el('span', { class: 'sub' }, '· ' + opisStacji())), wynik);
+  licz();
+}
+
+// ---------------- RANKING ----------------
+const R = { typ: 'utwory', rokOd: '', rokDo: '', kraj: '', limit: 100, ulubione: false };
+WIDOKI.ranking = (box) => {
+  const wynik = el('div', {}, szkielet(1));
+  const licz = () => idz('ranking');
+  const rok = (k, ph) => { const i = el('input', { type: 'number', min: 1900, max: 2100, placeholder: ph, value: R[k] || '', style: { width: '84px' }, 'aria-label': 'Rok wydania ' + ph }); i.addEventListener('change', () => { R[k] = i.value; licz(); }); return i; };
+  const kraj = el('select', { 'aria-label': 'Wykonawcy' }, el('option', { value: '' }, 'Wszyscy wykonawcy'), el('option', { value: 'PL' }, 'Polscy'), el('option', { value: 'INT' }, 'Zagraniczni'));
+  kraj.value = R.kraj; kraj.addEventListener('change', () => { R.kraj = kraj.value; licz(); });
+  const lim = el('select', { 'aria-label': 'Liczba pozycji' }, [50, 100, 200, 500].map((n) => el('option', { value: n }, 'Top ' + n)));
+  lim.value = R.limit; lim.addEventListener('change', () => { R.limit = +lim.value; licz(); });
+  box.replaceChildren(
+    el('div', { class: 'naglowek-karty' }, el('h1', {}, 'Ranking')),
+    pasekFiltrow(licz),
+    el('div', { class: 'filtry' }, ['utwory', 'wykonawcy'].map((t) => el('button', { class: 'chip' + (R.typ === t ? ' akt' : ''), onclick: () => { R.typ = t; licz(); } }, t === 'utwory' ? 'Utwory' : 'Wykonawcy')),
+      el('span', { class: 'sub' }, 'Rok wydania'), rok('rokOd', 'od'), '–', rok('rokDo', 'do'), kraj, lim,
+      el('button', { class: 'chip' + (R.ulubione ? ' akt' : ''), onclick: () => { R.ulubione = !R.ulubione; licz(); } }, '★ Tylko moje ulubione'),
+      // O3: zmiana miejsca wobec poprzedniego okresu albo tego samego okresu rok temu
+      el('button', { class: 'chip' + (R.porownanie === 'rok' ? ' akt' : ''), onclick: () => { R.porownanie = R.porownanie === 'rok' ? 'poprzedni' : 'rok'; licz(); } }, 'Porównaj z rokiem temu'),
+      przyciskZapiszWidok('ranking', null)),
+    wynik);
+  serwerP('ranking', { jednostki: S.wybrane, od: S.od, do: S.do, preset: S.preset || null, porownanie: R.porownanie || 'poprzedni', typ: R.typ, rokOd: R.rokOd, rokDo: R.rokDo, kraj: R.kraj, limit: R.limit, tylkoUlubione: R.ulubione })
+    .then((r) => {
+      const porown = r.emisji > 0 && r.emisjiPoprzednio >= 0.6 * r.emisji;
+      const zm = (x) => { if (!x.poprzednio && x.poprzednioPoza) return el('span', { class: 'zm', title: 'Grany w poprzednim okresie, ale poza ' + x.poprzednioPoza + ' pierwszymi miejscami z tym filtrem' }, 'poza ' + fmt(x.poprzednioPoza)); if (!x.poprzednio) return el('span', { class: 'zm n', title: 'Nie było w poprzednim okresie' }, 'nowość'); const d = x.poprzednio - x.miejsce; return d ? el('span', { class: 'zm ' + (d > 0 ? 'w' : 's'), title: 'Poprzednio ' + x.poprzednio + '.' }, (d > 0 ? '▲ ' : '▼ ') + Math.abs(d)) : el('span', { class: 'zm' }, '='); };
+      const kol = R.typ === 'utwory'
+        ? [['#', (x) => x.miejsce, 'num'], porown ? ['Zmiana', zm, null, (x) => x.poprzednio ? x.poprzednio - x.miejsce : 'nowość'] : null, ['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['', (x) => przyciskFragmentu(x), 'num', () => ''], ['8 tyg.', (x) => (x.trend ? el('span', { title: 'Emisje w 8 ostatnich tygodniach okresu: ' + x.trend.join(', ') }, iskierka(x.trend, 70, 20)) : ''), 'tylko-szeroki', (x) => (x.trend || []).join(' ')], ['Rok', (x) => x.y || '', 'num tylko-szeroki'], ['Emisje', (x) => fmt(x.n), 'num', (x) => x.n], ['', przyciskApple, 'num tylko-szeroki', () => '']]
+        : [['#', (x) => x.miejsce, 'num'], porown ? ['Zmiana', zm, null, (x) => x.poprzednio ? x.poprzednio - x.miejsce : 'nowość'] : null, ['Wykonawca', (x) => el('span', { class: 'utw' }, el('b', {}, x.a), el('span', { class: 'wyk' }, ' · najczęściej: ' + x.top[0])), null, (x) => x.a], ['Utworów', (x) => fmt(x.utworow), 'num tylko-szeroki'], ['Emisje', (x) => fmt(x.n), 'num', (x) => x.n]];
+      wynik.replaceChildren(karta((R.typ === 'utwory' ? 'Najczęściej grane utwory' : 'Najczęściej grani wykonawcy') + ' – ' + opisStacji(),
+        `${dataPL(r.od || S.od)} – ${dataPL(r.do || S.do)} · ${fmt(r.emisji)} emisji, ${r.przyblizony ? 'co najmniej ' : ''}${fmt(r.wszystkich)} pozycji, ${fmt(r.dni)} dób z danymi. ` + (porown ? `Zmiana miejsca wobec ${r.porownanie === 'rok' ? 'roku temu: ' : ''}${dataPL(r.poprzedniOkres[0])} – ${dataPL(r.poprzedniOkres[1])}.` : r.bezRokuTemu ? 'Porównanie z rokiem temu pojawi się po przeliczeniu zestawień w Odbiorniku.' : 'Bez zmian miejsc: za mało danych w poprzednim okresie.')
+          + (r.gotowy ? ` Zestawienie przeliczone ${new Date(r.gotowy).toLocaleString('pl-PL', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}.` : '')
+          + (r.przyblizony ? ` Z filtrem liczone z ${fmt(r.zListy || 3000)} najczęściej granych utworów okresu – pod koniec listy mogą brakować utwory granych rzadziej.` : ''),
+        R.typ === 'utwory' && r.pozycje.length ? el('div', { class: 'wiersz', style: { marginBottom: '8px' } },
+          el('button', { class: 'przycisk', onclick: () => doSpotify(r.pozycje) }, 'Zapisz w Spotify'),
+          el('button', { class: 'przycisk drugi', onclick: () => doApple(r.pozycje) }, 'Apple Music (CSV)'),
+          el('button', { class: 'przycisk drugi', onclick: () => { navigator.clipboard && navigator.clipboard.writeText(linkDoWidoku()).then(() => toast('Skopiowano link do tego rankingu')); } }, 'Kopiuj link')) : null,
+        tabela(kol.filter(Boolean), r.pozycje, { klik: (x) => (R.typ === 'utwory' ? idz('utwor', x.k) : idz('wykonawca', x.k)), nazwaEksportu: 'Ranking ' + opisStacji() + ' ' + S.od + ' ' + S.do, pusta: 'Brak emisji w tym okresie i przy tych filtrach.' })));
+    }).catch((e) => bladW(wynik, e));
+};
+function nazwaPlaylisty() { return `${opisStacji()} – top ${R.limit} (${S.od} – ${S.do})`; }
+function doSpotify(pozycje) {
+  if (!S.start.spotify.polaczony) { toast('Najpierw połącz Spotify w zakładce Playlisty.'); idz('playlisty'); return; }
+  toast('Zapisuję playlistę w Spotify – to może potrwać do kilku minut…', 5000);
+  serwer('spotifyZapiszPlayliste', nazwaPlaylisty(), 'Music Base: ' + opisStacji() + ', ' + S.od + ' – ' + S.do, pozycje.map((x) => ({ k: x.k, a: x.a, t: x.t })))
+    .then((w) => otworzArkusz(el('div', {}, el('h2', {}, 'Zapisano ' + w.dodano + ' utworów'), el('p', {}, el('a', { href: w.url, target: '_blank', rel: 'noopener' }, 'Otwórz playlistę w Spotify')),
+      w.brak.length ? el('details', { style: { marginTop: '8px' } }, el('summary', {}, 'Nie znaleziono w Spotify: ' + w.brak.length), el('p', { class: 'sub' }, w.brak.join(' · '))) : null)))
+    .catch((e) => toast('Spotify: ' + e.message, 5000));
+}
+function doApple(pozycje) {
+  serwer('eksportApple', nazwaPlaylisty(), pozycje.map((x) => ({ a: x.a, t: x.t })))
+    .then((w) => otworzArkusz(el('div', {}, el('h2', {}, 'Plik dla Apple Music'), el('p', {}, el('a', { href: w.url, target: '_blank', rel: 'noopener' }, 'Otwórz plik CSV na Dysku')),
+      el('p', { class: 'opis', style: { marginTop: '8px' } }, 'Zaimportuj go w serwisie do przenoszenia playlist (źródło: plik CSV, cel: Apple Music) albo przenieś gotową playlistę ze Spotify.'))))
+    .catch((e) => toast(e.message));
+}
+
+// ---------------- SZUKAJ ----------------
+// Z1: wyszukiwarka – ostatnie wyszukiwania, wyniki w zakładkach Utwory / Wykonawcy / Stacje, filtr roku wydania
+const HIST_SZUKAJ = 'mb-szukaj-historia';
+const historiaSzukania = () => { try { return JSON.parse(localStorage.getItem(HIST_SZUKAJ) || '[]') || []; } catch (e) { return []; } };
+function zapamietajSzukanie(q) { try { localStorage.setItem(HIST_SZUKAJ, JSON.stringify([q].concat(historiaSzukania().filter((x) => x.toLowerCase() !== q.toLowerCase())).slice(0, 12))); } catch (e) { /* bez pamięci */ } }
+const SZ = { zakl: 'utwory', rokOd: '', rokDo: '' };
+WIDOKI.szukaj = (box, q) => {
+  const pole = el('input', { type: 'search', placeholder: 'Wykonawca albo tytuł', style: { flex: 1, minWidth: 0 }, value: q || '' });
+  const wynik = el('div'), historia = el('div', { class: 'filtry', style: { marginTop: '8px' } });
+  const rysujHistorie = () => {
+    const h = historiaSzukania();
+    historia.replaceChildren(...(h.length ? [el('span', { class: 'sub' }, 'Ostatnio:')].concat(h.map((x) => el('button', { class: 'chip', onclick: () => { pole.value = x; szukaj(); } }, x)),
+      [el('button', { class: 'link sub', onclick: () => { try { localStorage.removeItem(HIST_SZUKAJ); } catch (e) { /* bez pamięci */ } rysujHistorie(); } }, 'wyczyść')]) : []));
+  };
+  const rokOd = el('input', { type: 'number', placeholder: 'rok od', min: 1900, max: 2100, value: SZ.rokOd, style: { width: '96px' }, 'aria-label': 'Rok wydania od' });
+  const rokDo = el('input', { type: 'number', placeholder: 'rok do', min: 1900, max: 2100, value: SZ.rokDo, style: { width: '96px' }, 'aria-label': 'Rok wydania do' });
+  const szukaj = () => {
+    const q2 = pole.value.trim();
+    if (q2.length < 2) { wynik.replaceChildren(el('p', { class: 'stan' }, 'Wpisz co najmniej 2 znaki.')); return; }
+    zapamietajSzukanie(q2); rysujHistorie();
+    wynik.replaceChildren(...szkielet(1));
+    // domyślnie 50 000 najczęściej granych utworów (szybko); „Szukaj w całej bazie” – wszystkie (wolniej, kilkanaście sekund)
+    const cala = SZ.cala === q2 ? { calaBaza: true } : null;
+    const wCalej = (w) => (w && w.wBazie > w.przeszukano ? el('p', { class: 'sub', style: { margin: '4px 0 8px' } },
+      `Przeszukano ${fmt(w.przeszukano)} najczęściej granych z ${fmt(w.wBazie)}. `,
+      el('button', { class: 'przycisk drugi maly', onclick: () => { SZ.cala = q2; szukaj(); } }, 'Szukaj w całej bazie (wolniej)')) : null);
+    Promise.all([serwerP('szukaj', q2, cala), serwerP('szukajWykonawcow', q2, cala).catch(() => ({ wykonawcy: [] }))]).then(([r, rw]) => {
+      SZ.rokOd = rokOd.value; SZ.rokDo = rokDo.value;
+      const utw = r.wyniki.filter((x) => (!SZ.rokOd || (x.y && x.y >= +SZ.rokOd)) && (!SZ.rokDo || (x.y && x.y <= +SZ.rokDo)));
+      const ql = q2.toLowerCase(), st = S.start.jednostki.filter((j) => j.nazwa.toLowerCase().includes(ql));
+      const zakl = [['utwory', 'Utwory', utw.length], ['wykonawcy', 'Wykonawcy', rw.wykonawcy.length], ['stacje', 'Stacje', st.length]];
+      if (!zakl.some((z) => z[0] === SZ.zakl && z[2])) { const pierwsza = zakl.find((z) => z[2]); if (pierwsza) SZ.zakl = pierwsza[0]; }
+      const tresc = el('div');
+      const rysuj = () => {
+        pasek.querySelectorAll('button').forEach((b) => b.classList.toggle('akt', b.dataset.z === SZ.zakl));
+        if (SZ.zakl === 'wykonawcy') tresc.replaceChildren(wCalej(rw), tabela([['Wykonawca', (x) => el('b', {}, x.a)], ['Utworów', (x) => fmt(x.utworow), 'num'], ['Emisje', (x) => fmt(x.n), 'num']], rw.wykonawcy, { limit: 25, klik: (x) => idz('wykonawca', x.wk), nazwaEksportu: 'Wykonawcy – ' + q2, pusta: 'Brak wykonawców.' }));
+        else if (SZ.zakl === 'stacje') tresc.replaceChildren(tabela([['Stacja', (j) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(j.id, 'm'), j.nazwa)]], st, { klik: (j) => idz('stacja', j.id), pusta: 'Brak stacji.' }));
+        else tresc.replaceChildren(el('p', { class: 'opis' }, `Utworów: ${fmt(utw.length)}${r.wszystkich > r.wyniki.length ? ' (z ' + fmt(r.wszystkich) + ' – pokazano 500 najczęściej granych)' : ''}${SZ.rokOd || SZ.rokDo ? ' · filtr roku wydania (tylko utwory ze znanym rokiem)' : ''}`), wCalej(r),
+          tabela([['', (x) => przyciskFragmentu(x), 'num', () => ''], ['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num'], ['Stacji', (x) => fmt(x.stacji), 'num tylko-szeroki'], ['Pierwsza emisja', (x) => dataPL(x.pierwsza), 'num tylko-szeroki'], ['Ostatnio', (x) => miesPL(x.ostatni), 'num tylko-szeroki']],
+            utw, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Wyszukiwanie ' + q2, pusta: 'Nic nie znaleziono.' }));
+      };
+      const pasek = el('div', { class: 'zakladki', role: 'tablist' }, zakl.map(([id, n, ile]) => el('button', { 'data-z': id, role: 'tab', onclick: () => { SZ.zakl = id; rysuj(); } }, n + ' (' + fmt(ile) + ')')));
+      wynik.replaceChildren(pasek, tresc);
+      rysuj();
+    }).catch((e) => bladW(wynik, e));
+  };
+  let t;
+  pole.addEventListener('input', () => { clearTimeout(t); t = setTimeout(szukaj, 350); });
+  [rokOd, rokDo].forEach((x) => x.addEventListener('change', szukaj));
+  box.replaceChildren(el('h1', {}, 'Szukaj'), karta(null, null, el('p', { class: 'opis', style: { marginBottom: '8px' } }, 'Gdzie i kiedy leciał ten utwór? Cała historia wszystkich stacji; wielkość liter i polskie znaki nie mają znaczenia.'),
+    el('div', { class: 'wiersz' }, pole, el('span', { class: 'sub' }, 'Rok wydania:'), rokOd, '–', rokDo), historia), wynik);
+  rysujHistorie();
+  pole.focus();
+  if (q) szukaj();
+};
+
+// Z2: profil wykonawcy
+WIDOKI.wykonawca = (box, wk) => {
+  serwerP('profilWykonawcy', wk).then((r) => {
+    const os = el('div', { class: 'wykres' });
+    const alertBtn = el('button', { class: 'przycisk drugi', html: svgIkona(IK.alerty) + 'Alert e-mail', onclick: () => serwer('alerty').then((al) => {
+      const lista = al.alerty || [];
+      if (lista.some((x) => x.typ === 'wykonawca' && x.tekst.toLowerCase() === r.nazwa.toLowerCase())) { toast('Alert dla tego wykonawcy już jest'); return; }
+      lista.push({ typ: 'wykonawca', tekst: r.nazwa, opis: r.nazwa, stacje: [] });
+      return serwer('zapiszAlerty', lista).then(() => toast('Alert dodany: ' + r.nazwa));
+    }).catch((e) => toast(e.message)) });
+    box.replaceChildren(
+      el('div', { class: 'karta' }, el('h1', {}, r.nazwa), el('p', { class: 'opis' }, 'Wykonawca · w bazie od ' + (r.pierwsza ? dataPL(r.pierwsza) : '–')),
+        el('div', { class: 'wiersz', style: { marginTop: '10px' } }, alertBtn, el('button', { class: 'przycisk drugi', onclick: () => { R.typ = 'utwory'; idz('szukaj', r.nazwa); } }, 'Szukaj utworów'))),
+      kafle([['Emisji', fmt(r.emisji), 'cała historia, wszystkie stacje'], ['Utworów', fmt(r.utwory.length), r.goscinne.length ? '+ ' + fmt(r.goscinne.length) + ' z udziałem' : ''],
+        ['Stacji', fmt(r.stacje.length), r.stacje[0] ? 'najwięcej: ' + r.stacje[0].nazwa : ''], ['Debiut na antenie', r.pierwsza ? dataPL(r.pierwsza) : '–', 'pierwsza emisja w bazie']]),
+      karta('Emisje miesiąc po miesiącu', 'Wszystkie utwory wykonawcy (także z udziałem), całe radio.', os),
+      el('div', { class: 'siatka2' },
+        karta('Utwory', null, tabela([['', (x) => przyciskFragmentu(x), 'num', () => ''], ['Utwór', (x) => el('b', {}, x.t), null, (x) => x.t], ['Emisje', (x) => fmt(x.n), 'num'], ['Stacji', (x) => fmt(x.stacji), 'num tylko-szeroki'], ['Od', (x) => dataPL(x.pierwsza), 'num tylko-szeroki', (x) => x.pierwsza]],
+          r.utwory, { limit: 15, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Utwory ' + r.nazwa })),
+        karta('Na których stacjach', null, tabela([['Stacja', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), x.nazwa), null, (x) => x.nazwa],
+          ['Emisje', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px' } }, el('span', { class: 'pasek tylko-szeroki', style: { width: '80px', display: 'inline-block' } }, el('i', { style: { width: (100 * x.n / r.stacje[0].n).toFixed(1) + '%' } })), fmt(x.n)), 'num', (x) => x.n]],
+          r.stacje, { limit: 12, klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Stacje – ' + r.nazwa, pusta: 'Brak danych o stacjach (lata całego radia jeszcze się liczą).' }))),
+      r.goscinne.length ? karta('Z udziałem', 'Utwory, w których wykonawca występuje jako gość.', tabela([['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num']], r.goscinne, { limit: 10, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Z udziałem ' + r.nazwa })) : null);
+    if (r.miesiace.length > 1) linie(os, r.miesiace.map((m) => miesPL(m[0])), [{ nazwa: 'Emisje', wartosci: r.miesiace.map((m) => m[1]) }], { format: (v) => fmt(v), minY: 0 });
+    else os.replaceChildren(el('p', { class: 'opis' }, 'Za mało miesięcy.'));
+  }).catch((e) => bladW(box, e));
+};
+
+// ---------------- STACJE ----------------
+let grupaStacji = '';
+WIDOKI.stacje = (box) => {
+  const ulub = S.moje.ulubioneStacje || [];
+  const grupy = S.start.grupy || {}, grupa = (id) => grupy[id] || 'Pozostałe';
+  const kolejnosc = [...new Set(Object.values(grupy)), 'Pozostałe'];
+  const pozUl = (id) => (ulub.includes(id) ? ulub.indexOf(id) : 1e3);
+  // T1: sortowanie i zwarty widok (zapamiętane)
+  let ust = { sort: 'ulubione', zwarty: false };
+  try { Object.assign(ust, JSON.parse(localStorage.getItem('mb-stacje') || '{}')); } catch (e) { /* domyślne */ }
+  const udzial = (id) => { const r = ((window.STACJE_DANE || {})[id] || {}).rynek; if (r) return r.udzial; const l = miastaStacji(id); return l.length ? l[0].s.udzial[l[0].m.fale.length - 1] / 10 : -1; };
+  const SORT = { ulubione: (a, b) => (pozUl(a.id) - pozUl(b.id)) || porownajStacje(a.id, b.id), udzial: (a, b) => udzial(b.id) - udzial(a.id) || porownajStacje(a.id, b.id),
+    nazwa: (a, b) => a.nazwa.localeCompare(b.nazwa, 'pl'), dane: (a, b) => (a.pierwszy < b.pierwszy ? -1 : a.pierwszy > b.pierwszy ? 1 : 0) };
+  let lista = S.start.jednostki.slice().sort(SORT[ust.sort] || SORT.ulubione);
+  const sortSel = el('select', { 'aria-label': 'Sortowanie stacji' }, [['ulubione', 'Ulubione najpierw'], ['udzial', 'Udział w rynku'], ['nazwa', 'Alfabetycznie'], ['dane', 'Najdłużej w bazie']].map(([v, n]) => el('option', { value: v }, n)));
+  sortSel.value = ust.sort;
+  const zapiszUst = () => { try { localStorage.setItem('mb-stacje', JSON.stringify(ust)); } catch (e) { /* bez pamięci */ } };
+  sortSel.addEventListener('change', () => { ust.sort = sortSel.value; zapiszUst(); lista = S.start.jednostki.slice().sort(SORT[ust.sort]); rysuj(); });
+  const zwartyBtn = el('button', { class: 'chip' + (ust.zwarty ? ' akt' : ''), onclick: () => { ust.zwarty = !ust.zwarty; zapiszUst(); zwartyBtn.classList.toggle('akt', ust.zwarty); siatka.classList.toggle('zwarty', ust.zwarty); } }, 'Zwarta lista');
+  const ile = {}; lista.forEach((j) => { ile[grupa(j.id)] = (ile[grupa(j.id)] || 0) + 1; });
+  const szukaj = el('input', { type: 'search', placeholder: 'Filtruj stacje', style: { width: '220px' } });
+  const chipy = el('div', { class: 'filtry' });
+  const siatka = el('div', { class: 'st-kafle' + (ust.zwarty ? ' zwarty' : '') });
+  const rysujChipy = () => chipy.replaceChildren(...[['', 'Wszystkie (' + lista.length + ')']].concat(kolejnosc.filter((g) => ile[g]).map((g) => [g, g + ' (' + ile[g] + ')']))
+    .map(([g, n]) => el('button', { class: 'chip' + (grupaStacji === g ? ' akt' : ''), onclick: () => { grupaStacji = g; rysujChipy(); rysuj(); } }, n)));
+  const rysuj = () => {
+    const q = szukaj.value.toLowerCase();
+    siatka.replaceChildren(...lista.filter((j) => j.nazwa.toLowerCase().includes(q) && (!grupaStacji || grupa(j.id) === grupaStacji)).map((j) => el('div', { class: 'st-kafel kst', style: kolorStacji(j.id) ? { '--kst': kolorStacji(j.id) } : {}, onclick: (e) => { if (!e.target.closest('.ikona-btn')) idz('stacja', j.id); } },
+      logo(j.id), el('div', { style: { flex: 1 } }, el('div', { class: 'n' }, j.nazwa, ulub.includes(j.id) ? ' ★' : '', j.typ === 'siec' ? el('span', { class: 'znacznik' }, 'sieć') : null),
+        el('div', { class: 'z' }, grupa(j.id) + (((window.STACJE_DANE || {})[j.id] || {}).rynek ? ' · udział ' + STACJE_DANE[j.id].rynek.udzial.toLocaleString('pl-PL') + '%' : udzialLokalnyKrotko(j.id)) + (((window.STACJE_DANE || {})[j.id] || {}).format ? ' · ' + STACJE_DANE[j.id].format : '')),
+        el('div', { class: 'z' }, dataPL(j.pierwszy) + ' – ' + dataPL(j.ostatni)), j.typ === 'siec' ? el('div', { class: 'z' }, j.czlonkowie.map((c) => c.nazwa).join(', ')) : null),
+      Odtwarzacz.maStrumien(j.id) ? el('button', { class: 'ikona-btn', title: 'Słuchaj', 'aria-label': 'Słuchaj ' + j.nazwa, html: svgIkona(IK.graj), onclick: () => Odtwarzacz.graj(j.id) }) : null)));
+  };
+  szukaj.addEventListener('input', rysuj);
+  rysujChipy(); rysuj();
+  box.replaceChildren(el('div', { class: 'naglowek-karty' }, el('div', {}, el('h1', {}, 'Stacje'), el('p', { class: 'opis' }, 'Sieci (Fama, Jura/Radio 90) są jedną pozycją; ta sama piosenka na stacjach sieci w odstępie do 3 minut liczy się raz. Sortowanie i zwarty widok zapamiętuje ta przeglądarka.')), szukaj), el('div', { class: 'wiersz' }, sortSel, zwartyBtn), chipy, siatka);
+};
+
+// ---------------- PROFIL STACJI (S1–S8) ----------------
+WIDOKI.stacja = (box, j) => {
+  const jedn = S.jedn[j];
+  if (!jedn) { bladW(box, new Error('Nie ma takiej stacji.')); return; }
+  const czySiec = !!(jedn.czlonkowie && jedn.czlonkowie.length);
+  const ulub = (S.moje.ulubioneStacje || []).includes(j);
+  const gwiazda = el('button', { class: 'ikona-btn' + (ulub ? ' akt' : ''), title: 'Ulubiona stacja', 'aria-label': 'Ulubiona stacja', html: svgIkona(IK.gwiazda), onclick: (e) => przelaczUlubionaStacje(j, e.currentTarget) });
+  const odswiez = () => idz('stacja', j);
+  const kTeraz = el('div', {}, szkielet(1)), kKafle = el('div', {}, szkielet(1)), kRynek = el('div'), kTop = el('div'), kWyr = el('div'), kNowe = el('div'), kMapa = el('div');
+  const kInfo = el('div', {}, szkielet(1)), kCoGra = el('div', {}, szkielet(1));
+  const kPodobneSt = el('div', {}, szkielet(1)), kKategorie = el('div', {}, szkielet(1));
+  const zakladkiStacji = el('div', { class: 'zakladki zakladki-profilu', role: 'tablist' });
+  const ladujPodobne = () => serwerP('podobneStacje', j, S.od, S.do).then((r) => kPodobneSt.replaceChildren(tabela([['', (x, i) => i + 1, 'num'], ['Stacja', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), x.nazwa), null, (x) => x.nazwa],
+    ['Podobieństwo', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px' } }, el('span', { class: 'pasek', style: { width: '80px', display: 'inline-block' } }, el('i', { style: { width: (x.pod * 100).toFixed(1) + '%' } })), proc(x.pod)), 'num', (x) => x.pod],
+    ['Wspólnych utworów', (x) => fmt(x.wspolnych), 'num tylko-szeroki', (x) => x.wspolnych]], r.stacje, { limit: 8, klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Podobne stacje ' + nazwa(j), pusta: 'Za mało danych w tym okresie.' })))
+    .catch((e) => kPodobneSt.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  kartaOStacji(j, kInfo);
+  const kZegar = el('div', { class: 'wykres' }), kZegarLinie = el('div', { class: 'wykres' }), kZmiany = el('div'), kEver = el('div'), kPasma = el('div'), kJakosc = el('div'), kCzl = el('div');
+  box.replaceChildren(
+    el('div', { class: 'karta' }, el('div', { class: 'wiersz', style: { alignItems: 'center', flexWrap: 'nowrap' } }, logo(j, 'd'),
+      el('div', { style: { flex: 1, minWidth: 0 } }, el('h1', {}, jedn.nazwa),
+        daneStacji(j).www ? el('a', { href: daneStacji(j).www, target: '_blank', rel: 'noopener', style: { fontSize: '14px', overflowWrap: 'anywhere' } }, daneStacji(j).www.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')) : null,
+        el('p', { class: 'opis' }, (S.start.grupy || {})[j] ? (S.start.grupy[j] + ' · ') : '', czySiec ? 'Sieć: ' + jedn.czlonkowie.map((c) => c.nazwa).join(', ') : 'Dane: ' + dataPL(jedn.pierwszy) + ' – ' + dataPL(jedn.ostatni))),
+      el('button', { class: 'ikona-btn', title: 'Edytuj stację', 'aria-label': 'Edytuj stację', html: svgIkona(IK.edytuj), onclick: () => edytujStacje(j) }), gwiazda),
+      el('div', { class: 'wiersz', style: { marginTop: '12px' } },
+        Odtwarzacz.maStrumien(j) ? el('button', { class: 'przycisk', html: svgIkona(IK.graj) + 'Odtwórz', onclick: () => Odtwarzacz.graj(j) }) : el('span', { class: 'sub' }, 'Brak działającego strumienia tej stacji.'),
+        Odtwarzacz.maStrumien(j) ? el('button', { class: 'przycisk drugi', html: svgIkona(IK.dodaj) + 'Do kolejki', onclick: () => Odtwarzacz.doKolejki(j) }) : null,
+        el('button', { class: 'przycisk drugi', onclick: () => { S.wybrane = [j]; idz('ranking'); } }, 'Pełny ranking'),
+        maRamowke(j) ? el('button', { class: 'przycisk drugi', onclick: () => idz('epg', j) }, 'Ramówka') : null)),
+    pasekFiltrow(odswiez, { stacje: false }), zakladkiStacji);
+  // S1
+  function ladujTeraz() { serwer('teraz', [j]).then((w) => {
+    const u = ((w.stacje || {})[j] || {}).utwory || [];
+    kTeraz.replaceChildren(u.length ? tabela([['', (x) => x.g, 'num'], ['Utwór', (x) => utworKomorka(x)]], u, { klik: (x) => idz('utwor', x.k) }) : el('p', { class: 'opis' }, 'Brak emisji w bieżącym oknie albo brak danych na żywo.'));
+  }).catch((e) => kTeraz.replaceChildren(el('p', { class: 'blad' }, e.message))); }
+  // profil (kafle, top, nowości, mapa, członkowie sieci)
+  function ladujProfil() { serwerP('profilJednostki', j, S.od, S.do).then((p) => {
+    kKafle.replaceChildren(kafle([['Emisji', fmt(p.emisji), fmt(p.dni) + ' dób z danymi'], ['Różnych utworów', fmt(p.utworow), ''], ['Rotacja', proc(p.udzialTop20), 'udział 20 najczęstszych utworów'],
+      ['Średni rok wydania', p.sredniRokWydania || '–', 'ważony emisjami'], ['Polscy wykonawcy', proc(p.udzialPL), p.pokrycieKraju ? 'znany kraj: ' + proc(p.pokrycieKraju) + ' emisji' : 'brak danych o kraju'],
+      // O3: ten sam okres rok temu
+      p.rokTemu ? ['Rok temu', fmt(p.rokTemu.emisji) + ' emisji', fmt(p.rokTemu.utworow) + ' utworów, polscy ' + proc(p.rokTemu.udzialPL) + ' (' + dataPL(p.rokTemu.od, false) + ' – ' + dataPL(p.rokTemu.do) + ')'] : null].filter(Boolean)));
+    kTop.replaceChildren(tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num']], p.top, { limit: 25, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Top ' + p.nazwa }));
+    coGra(kCoGra, p);
+    kNowe.replaceChildren(tabela([['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num']], p.nowe, { klik: (x) => idz('utwor', x.k), pusta: 'Brak.' }));
+    kMapa.replaceChildren(mapaCieplna(p.hw));
+    if (p.czlonkowie) kCzl.replaceChildren(el('p', { class: 'opis', style: { marginBottom: '8px' } }, `Suma emisji stacji ${fmt(p.czlonkowie.reduce((s, c) => s + c.emisji, 0))}, sieć bez powtórzeń wspólnych pasm ${fmt(p.emisji)} (${fmt(p.wspolnePowtorzenia)} to ten sam utwór nadany równocześnie na kilku stacjach).`),
+      tabela([['Stacja', (c) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(c.id, 'm'), c.nazwa)], ['Emisji', (c) => fmt(c.emisji), 'num'], ['Utworów', (c) => fmt(c.utworow), 'num']], p.czlonkowie));
+  }).catch((e) => bladW(kKafle, e)); }
+  // S8
+  function ladujNaTle() { serwerP('naTleRynku', j, S.do.slice(0, 4)).then((r) => {
+    if (!r.stacja) { kRynek.replaceChildren(el('p', { class: 'opis' }, 'Brak metryk tej stacji za ten rok.')); return; }
+    const wiersz = (n, pole, f) => {
+      const v = r.stacja[pole], mn = r.mediana[pole + '_min'], mx = r.mediana[pole + '_max'], med = r.mediana[pole];
+      const poz = (x) => (mx > mn ? ((x - mn) / (mx - mn)) * 100 : 50);
+      return el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(110px, 1fr) 2fr auto', gap: '10px', alignItems: 'center', padding: '6px 0' } }, el('span', {}, n),
+        el('div', { style: { position: 'relative', height: '10px', background: 'var(--siatka)', borderRadius: '5px' } },
+          med != null ? el('i', { title: 'Mediana stacji: ' + f(med), style: { position: 'absolute', left: poz(med) + '%', top: '-3px', width: '2px', height: '16px', background: 'var(--tekst3)' } }) : null,
+          v != null ? el('i', { title: 'Ta stacja: ' + f(v), style: { position: 'absolute', left: `calc(${poz(v)}% - 6px)`, top: '-1px', width: '12px', height: '12px', borderRadius: '50%', background: 'var(--s1)', border: '2px solid var(--karta)' } }) : null),
+        el('span', { class: 'num' }, f(v) + ' ', el('span', { class: 'sub' }, '(mediana ' + f(med) + ')')));
+    };
+    kRynek.replaceChildren(wiersz('Emisji na dobę', 'naDobe', (x) => fmt(x)), wiersz('Różnych utworów', 'utworow', (x) => fmt(x)), wiersz('Rotacja (top 20)', 'rotacja', proc),
+      wiersz('Średni rok wydania', 'sredniRok', (x) => fmt(x)), wiersz('Polscy wykonawcy', 'udzialPL', proc), el('p', { class: 'sub' }, 'Porównanie z ' + r.stacji + ' stacjami i sieciami.'));
+  }).catch((e) => kRynek.replaceChildren(el('p', { class: 'opis' }, e.message))); }
+  // S4
+  const ladujWyrozniki = () => serwerP('wyrozniki', j, S.od, S.do).then((r) => kWyr.replaceChildren(tabela([['Utwór', utworKomorka], ['Tutaj', (x) => fmt(x.n), 'num'], ['×', (x) => fmt(x.wskaznik, 1) + '×', 'num']], r.wyrozniki, { limit: 20, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Wyróżniki ' + nazwa(j) })))
+    .catch((e) => kWyr.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  // S2
+  function ladujPory() { serwerP('poryDnia', j, S.od, S.do).then((r) => {
+    slupki(kZegar, r.godziny.map((g) => String(g.h)), r.godziny.map((g) => g.emisji), { wys: 140, opis: (e, v) => `${e}:00–${e}:59: <b>${fmt(v)}</b> emisji` });
+    linie(kZegarLinie, r.godziny.map((g) => g.h + ':00'), [
+      { nazwa: 'Polscy wykonawcy', wartosci: r.godziny.map((g) => g.udzialPL) }, { nazwa: 'Nowości', wartosci: r.godziny.map((g) => g.nowosci) }, { nazwa: 'Klasyki (≥ 20 lat)', wartosci: r.godziny.map((g) => g.klasyki) }],
+    { wys: 170, format: proc, minY: 0, procenty: true, minEtykieta: 40 });
+  }).catch((e) => kZegar.replaceChildren(el('p', { class: 'blad' }, e.message))); }
+  // S3
+  function ladujZmiany() { serwerP('zmianyJednostki', j, S.od.slice(0, 4), S.do.slice(0, 4)).then((r) => {
+    if (r.miesiace.length < 2) { kZmiany.replaceChildren(el('p', { class: 'opis' }, 'Za mało miesięcy w wybranym okresie (wybierz dłuższy, np. „Wszystko”).')); return; }
+    const et = r.miesiace.map((m) => miesPL(m.m)), a = el('div', { class: 'wykres' }), b = el('div', { class: 'wykres' }), c = el('div', { class: 'wykres' });
+    kZmiany.replaceChildren(el('div', { class: 'siatka3' }, el('div', {}, el('h3', {}, 'Rotacja (top 20)'), a), el('div', {}, el('h3', {}, 'Średni rok wydania'), b), el('div', {}, el('h3', {}, 'Polscy wykonawcy'), c)));
+    linie(a, et, [{ nazwa: 'Rotacja', wartosci: r.miesiace.map((m) => m.rotacja) }], { wys: 150, format: proc, procenty: true });
+    linie(b, et, [{ nazwa: 'Średni rok', wartosci: r.miesiace.map((m) => m.sredniRok) }], { wys: 150, format: (v) => fmt(v) });
+    linie(c, et, [{ nazwa: 'Polscy', wartosci: r.miesiace.map((m) => m.udzialPL) }], { wys: 150, format: proc, procenty: true });
+  }).catch((e) => kZmiany.replaceChildren(el('p', { class: 'blad' }, e.message))); }
+  // S5 (na żądanie – czyta wszystkie lata stacji)
+  const ladujEvergreeny = () => kEver.replaceChildren(el('button', { class: 'przycisk drugi', onclick: () => {
+    kEver.replaceChildren(...szkielet(1));
+    serwerP('evergreeny', j).then((r) => kEver.replaceChildren(el('p', { class: 'opis', style: { marginBottom: '6px' } }, 'Lat z danymi: ' + r.lat),
+      tabela([['Utwór', utworKomorka], ['Lat', (x) => fmt(x.liczbaLat), 'num'], ['Lata', (x) => x.lata[0] + '–' + x.lata[x.lata.length - 1], 'num tylko-szeroki'], ['Emisje', (x) => fmt(x.n), 'num']], r.evergreeny, { klik: (x) => idz('utwor', x.k), pusta: 'Potrzeba co najmniej 3 lat danych.', nazwaEksportu: 'Evergreeny ' + r.nazwa })))
+      .catch((e) => kEver.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  } }, 'Policz evergreeny'));
+  // S6
+  const ladujPasma = () => { if (czySiec) serwerP('pasmaSieci', j, S.od, S.do).then((r) => kPasma.replaceChildren(mapaCieplna(r.wspolne, proc))).catch((e) => kPasma.replaceChildren(el('p', { class: 'blad' }, e.message))); };
+  // S7
+  function ladujJakosc() { serwerP('jakoscDanych', j).then((r) => {
+    kJakosc.replaceChildren(...r.stacje.map((s) => {
+      const dni = Object.keys(s.dni).sort();
+      if (!dni.length) return el('p', { class: 'opis' }, s.nazwa + ': brak pobranych dób.');
+      const mies = {};
+      dni.forEach((d) => { (mies[d.slice(0, 7)] = mies[d.slice(0, 7)] || {})[+d.slice(8, 10)] = s.dni[d]; });
+      const max = Math.max(1, ...Object.values(s.dni));
+      const klucze = Object.keys(mies).sort().slice(-36);
+      return el('div', { style: { marginBottom: '10px' } }, r.stacje.length > 1 ? el('h3', {}, s.nazwa) : null,
+        el('div', { class: 'przewin' }, el('div', { style: { display: 'grid', gridTemplateColumns: '70px repeat(31, 12px)', gap: '2px', fontSize: '11px', color: 'var(--tekst3)' } },
+          klucze.flatMap((m) => [el('span', {}, miesPL(m))].concat(Array.from({ length: 31 }, (_, i) => {
+            const v = mies[m][i + 1];
+            return el('span', { title: `${m}-${String(i + 1).padStart(2, '0')}: ${v === undefined ? 'nie pobrano' : v === 0 ? 'brak danych (luka)' : v + ' emisji'}`,
+              style: { width: '12px', height: '12px', borderRadius: '2px', background: v ? 'var(--s1)' : 'var(--siatka)', opacity: v ? (0.25 + 0.75 * v / max).toFixed(2) : 1, outline: v === 0 ? '1px solid var(--spadek)' : 'none' } });
+          }))))),
+        el('p', { class: 'sub' }, `${fmt(dni.length)} dób pobranych, luk: ${fmt(dni.filter((d) => !s.dni[d]).length)}; pokazano ostatnie ${klucze.length} miesięcy.`));
+    }));
+  }).catch((e) => kJakosc.replaceChildren(el('p', { class: 'blad' }, e.message))); }
+  const ladujKategorie = () => kategorieRotacji(kKategorie, j);
+  // M9 + F5: zakładki – każda ładuje swoje dane dopiero przy pierwszym otwarciu (zamiast ok. 10 zapytań naraz)
+  const PANELE = {
+    przeglad: ['Przegląd', () => [
+      el('div', { class: 'siatka2 profil-gora' }, karta('O stacji', null, kInfo),
+        el('div', { class: 'profil-kol' }, karta('Teraz i ostatnio', null, kTeraz), maRamowke(j) ? ramowkaStacji(j) : null)),
+      kKafle, karta('Co gra', 'Na podstawie najczęściej granych utworów w wybranym okresie (gatunki i lata – tylko utwory ze znanymi metadanymi).', kCoGra)], [ladujTeraz, ladujProfil]],
+    utwory: ['Utwory', () => [
+      el('div', { class: 'siatka2' }, karta('Najczęściej grane', null, kTop), karta('Wyróżniki stacji', 'Grane tu dużo częściej niż w całym radiu (udział tutaj / udział w radiu).', kWyr)),
+      karta('Kategorie rotacji', 'Rola utworu w playliście stacji w wybranym okresie: power (najczęściej grane), current (nowości w rotacji), recurrent (niedawne przeboje), gold (starsze). Kliknij kategorię, by zobaczyć i wyeksportować jej utwory.', kKategorie),
+      karta('Nowości w tym okresie', 'Pierwsza emisja w całej bazie wypada w tym okresie.', kNowe),
+      karta('Evergreeny', 'Utwory grane przez stację w największej liczbie różnych lat.', kEver)], [ladujProfil, ladujWyrozniki, ladujKategorie, ladujEvergreeny]],
+    analizy: ['Analizy', () => [
+      karta('Zegar formatu', 'Każda godzina doby: liczba emisji (słupki) i udział polskich wykonawców, nowości (wydane w ostatnim roku) i klasyków (≥ 20 lat) – tylko utwory ze znanymi danymi.', kZegar, kZegarLinie),
+      karta('Kiedy gra muzykę', 'Wszystkie emisje: dzień tygodnia × godzina.', kMapa),
+      karta('Zmiany w czasie', 'Miesiąc po miesiącu w latach wybranego okresu.', kZmiany),
+      czySiec ? karta('Stacje w sieci', null, kCzl) : null,
+      czySiec ? karta('Wspólne pasma sieci', 'Dzień tygodnia × godzina: jak duża część programu jest wspólna dla stacji sieci.', kPasma) : null], [ladujProfil, ladujPory, ladujZmiany, ladujPasma]],
+    rynek: ['Rynek', () => [
+      karta('Podobne stacje', 'Podobieństwo repertuaru: jak podobnie rozkładają się emisje tych samych utworów (1 = identycznie), ostatnie do 13 miesięcy okresu.', kPodobneSt),
+      karta('Na tle wszystkich stacji', 'Rok ' + S.do.slice(0, 4) + ': ta stacja wobec mediany pozostałych (pasek: od najniższej do najwyższej wartości wśród stacji).', kRynek)], [ladujPodobne, ladujNaTle]],
+    dane: ['Dane', () => [karta('Jakość danych', 'Każdy kwadrat to doba; kolor = liczba emisji, szary = brak danych.', kJakosc)], [ladujJakosc]],
+  };
+  const zaladowane = new Set(), panelBox = el('div', { class: 'panel-zakladki' });
+  const pokaz = (id) => {
+    S.zakladkaStacji = id;
+    zakladkiStacji.querySelectorAll('button').forEach((b) => { const a = b.dataset.z === id; b.classList.toggle('akt', a); b.setAttribute('aria-selected', String(a)); });
+    if (!PANELE[id].el) PANELE[id].el = el('div', { style: { display: 'grid', gap: 'var(--odstep)' } }, PANELE[id][1]());
+    panelBox.replaceChildren(PANELE[id].el);
+    PANELE[id][2].forEach((f) => { if (!zaladowane.has(f)) { zaladowane.add(f); f(); } });
+  };
+  zakladkiStacji.replaceChildren(...Object.keys(PANELE).map((id) => el('button', { 'data-z': id, role: 'tab', onclick: () => pokaz(id) }, PANELE[id][0])));
+  box.append(panelBox);
+  pokaz(PANELE[S.zakladkaStacji] ? S.zakladkaStacji : 'przeglad');
+};
+
+// ---------------- PORÓWNAJ ----------------
+// N2: start od ostatniego porównania, potem od ulubionych; zapisane zestawy w pamięci urządzenia
+const PAM_POROWNAN = 'mb-porownaj';
+const pamPorownan = () => { try { return JSON.parse(localStorage.getItem(PAM_POROWNAN)) || {}; } catch (e) { return {}; } };
+const zapiszPamPorownan = (p) => { try { localStorage.setItem(PAM_POROWNAN, JSON.stringify(p)); } catch (e) { /* tryb prywatny */ } };
+let doPorownania = (pamPorownan().ostatnie || []).slice(0, 6);
+WIDOKI.porownaj = (box) => {
+  const pam = pamPorownan(), istnieje = (id) => S.jedn[id];
+  doPorownania = doPorownania.filter(istnieje);
+  if (doPorownania.length < 2) doPorownania = ((S.moje && S.moje.ulubioneStacje) || []).filter(istnieje).slice(0, 6);
+  if (doPorownania.length >= 2) { pam.ostatnie = doPorownania; zapiszPamPorownan(pam); }
+  const zestawy = pam.zestawy || [];
+  const zapiszZestaw = () => {
+    if (doPorownania.length < 2) { toast('Wybierz najpierw co najmniej 2 stacje'); return; }
+    const n = prompt('Nazwa zestawu', doPorownania.map(nazwa).join(' / ').slice(0, 40));
+    if (!n) return;
+    const p = pamPorownan(); p.zestawy = (p.zestawy || []).filter((z) => z.n !== n).concat([{ n, s: doPorownania.slice() }]).slice(-12); zapiszPamPorownan(p);
+    toast('Zapisano zestaw „' + n + '”'); idz('porownaj', undefined, true);
+  };
+  const usunZestaw = (n) => { const p = pamPorownan(); p.zestawy = (p.zestawy || []).filter((z) => z.n !== n); zapiszPamPorownan(p); idz('porownaj', undefined, true); };
+  const presety = [['Ulubione', ((S.moje && S.moje.ulubioneStacje) || []).filter(istnieje).slice(0, 6), null]]
+    .concat(zestawy.map((z) => [z.n, z.s.filter(istnieje), z.n]))
+    .filter((x) => x[1].length >= 2);
+  const wynik = el('div');
+  const licz = () => {
+    if (doPorownania.length < 2) { wynik.replaceChildren(el('p', { class: 'opis' }, 'Wybierz co najmniej 2 stacje.')); return; }
+    wynik.replaceChildren(...szkielet(2));
+    serwerP('porownaj', doPorownania.slice(0, 6), S.od, S.do).then((r) => {
+      const nazwy = Object.fromEntries(r.stacje.map((s) => [s.id, s.nazwa]));
+      wynik.replaceChildren(
+        karta('Podsumowanie', null, tabela([['Stacja', (s) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(s.id, 'm'), s.nazwa), null, (s) => s.nazwa], ['Emisji', (s) => fmt(s.emisji), 'num'], ['Utworów', (s) => fmt(s.utworow), 'num'],
+          ['Tylko tu', (s) => fmt(s.unikalnych), 'num'], ['Polscy', (s) => proc(s.udzialPL), 'num'], ['Śr. rok', (s) => s.sredniRok || '–', 'num']], r.stacje, { nazwaEksportu: 'Porównanie stacji' })),
+        karta('Podobieństwo repertuaru', 'Udział wspólnych utworów w sumie utworów obu stacji.', r.pary.map((pr) => el('div', { style: { margin: '8px 0' } },
+          el('div', { class: 'wiersz', style: { justifyContent: 'space-between' } }, el('span', {}, nazwy[pr.a] + ' ↔ ' + nazwy[pr.b]), el('span', { class: 'sub' }, `${fmt(pr.wspolnych)} wspólnych · ${proc(pr.jaccard)}`)),
+          el('div', { class: 'pasek' }, el('i', { style: { width: (pr.jaccard * 100).toFixed(1) + '%' } }))))),
+        karta(`Grane na wszystkich wybranych (${fmt(r.wspolnych)})`, 'Ostatnia kolumna: stacja, która zagrała utwór pierwsza w tym okresie.',
+          tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t]].concat(r.stacje.map((s, i) => [s.nazwa, (x) => fmt(x.naStacjach[i]), 'num'])).concat([['Pierwsza', (x) => x.pierwszy ? x.pierwszy.j + ', ' + dataPL(x.pierwszy.d) : '–', 'tylko-szeroki']]),
+            r.wspolne, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Wspólne utwory' })),
+        el('div', { class: 'siatka2' }, r.stacje.map((s) => karta('Tylko w: ' + s.nazwa, null, tabela([['Utwór', utworKomorka], ['', (x) => fmt(x.n), 'num']], s.topUnikalne, { klik: (x) => idz('utwor', x.k) })))));
+    }).catch((e) => bladW(wynik, e));
+  };
+  box.replaceChildren(el('h1', {}, 'Porównaj stacje'), pasekFiltrow(() => idz('porownaj'), { stacje: false }),
+    karta(null, null, el('div', { class: 'wiersz' }, el('button', { class: 'przycisk', onclick: () => wyborStacji(doPorownania, (w) => { doPorownania = w; idz('porownaj'); }, { max: 6, tytul: 'Stacje do porównania (2–6)' }) }, 'Wybierz stacje'),
+      doPorownania.map((id) => el('span', { class: 'chip akt' }, nazwa(id))),
+      el('button', { class: 'chip', onclick: zapiszZestaw }, 'Zapisz zestaw')),
+      presety.length ? el('div', { class: 'wiersz', style: { marginTop: '10px' } }, el('span', { class: 'sub' }, 'Zestawy:'),
+        presety.map(([n, st, usuwalny]) => el('span', { class: 'wiersz', style: { gap: '2px', flexWrap: 'nowrap' } },
+          el('button', { class: 'chip' + (st.join() === doPorownania.join() ? ' akt' : ''), onclick: () => { doPorownania = st.slice(); idz('porownaj', undefined, true); } }, n + ' (' + st.length + ')'),
+          usuwalny ? el('button', { class: 'ikona-btn', 'aria-label': 'Usuń zestaw ' + n, onclick: () => usunZestaw(n) }, '×') : null))) : null), wynik);
+  licz();
+};
+</script>
+<script>
+'use strict';
+// ======================= Karta stacji: dane automatyczne (strona WWW, Wikidata, Wikipedia) + edycja =======================
+
+/** Dane stacji: wpisane w profilu (stacje_info.json) wygrywają z automatycznymi (STACJE_DANE: strona z odSluchane, artykuł Wikipedii). */
+function daneStacji(id) {
+  const auto = (window.STACJE_DANE || {})[id] || {}, wl = (S.start.infoStacji || {})[id] || {};
+  return Object.assign({}, auto, wl);
+}
+
+/** Wikidata + streszczenie Wikipedii – w przeglądarce (serwery Google i sesja Claude mają limity Wikimedii), pamięć 30 dni. */
+const WIKI_TTL = 30 * 864e5;
+function wikiStacji(tytul) {
+  const klucz = 'mb-wiki-' + tytul;
+  try { const z = JSON.parse(localStorage.getItem(klucz) || 'null'); if (z && Date.now() - z.t < WIKI_TTL) return Promise.resolve(z.d); } catch (e) { /* bez pamięci */ }
+  const api = (host, par) => fetch('https:\/\/' + host + '/w/api.php?' + new URLSearchParams(Object.assign({ format: 'json', origin: '*' }, par))).then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))));
+  return api('www.wikidata.org', { action: 'wbgetentities', sites: 'plwiki', titles: tytul, props: 'claims|descriptions|sitelinks', sitefilter: 'plwiki', languages: 'pl', redirects: 'yes', normalize: '1' }).then((d) => {
+    const e = Object.values(d.entities || {}).find((x) => !x.missing);
+    if (!e) return null;
+    const c = e.claims || {}, war = (p) => (c[p] || []).filter((x) => x.mainsnak && x.mainsnak.datavalue).map((x) => x.mainsnak.datavalue.value);
+    const ids = ['P159', 'P131', 'P17', 'P136', 'P127', 'P749', 'P921'].flatMap((p) => war(p).map((v) => v.id)).filter(Boolean);
+    const czas = war('P571')[0], www = war('P856')[0], cz = war('P2144')[0];
+    const etykiety = ids.length ? api('www.wikidata.org', { action: 'wbgetentities', ids: [...new Set(ids)].slice(0, 50).join('|'), props: 'labels', languages: 'pl|en' }) : Promise.resolve({ entities: {} });
+    const tytulPl = (e.sitelinks && e.sitelinks.plwiki && e.sitelinks.plwiki.title) || tytul;
+    const stresz = fetch('https:\/\/pl.wikipedia.org/api/rest_v1/page/summary/' + encodeURIComponent(tytulPl.replace(/ /g, '_'))).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    return Promise.all([etykiety, stresz]).then(([et, st]) => {
+      const nazwaQ = (id) => { const x = (et.entities || {})[id]; return x && x.labels ? (x.labels.pl || x.labels.en || {}).value : null; };
+      const lista = (p) => war(p).map((v) => nazwaQ(v.id)).filter(Boolean);
+      let zalozona = null;
+      if (czas) { const m = /^\+?(\d{4})-(\d\d)-(\d\d)/.exec(czas.time); if (m) zalozona = czas.precision >= 11 ? m[3] + '.' + m[2] + '.' + m[1] : czas.precision === 10 ? m[2] + '.' + m[1] : m[1]; }
+      const dane = { q: e.id, opisWd: (e.descriptions && e.descriptions.pl || {}).value || '', zalozona,
+        miasto: [...lista('P159'), ...lista('P131')].filter((v, i, a) => a.indexOf(v) === i).join(', '), kraj: lista('P17').join(', '),
+        gatunki: lista('P136').join(', '), wlasciciel: [...lista('P127'), ...lista('P749')].filter((v, i, a) => a.indexOf(v) === i).join(', '),
+        www: www || null, czestotliwosc: cz && cz.amount ? (+cz.amount).toLocaleString('pl-PL') + (cz.unit && /Q732707$/.test(cz.unit) ? ' MHz' : '') : null,
+        bio: st && st.extract ? st.extract : '', link: st && st.content_urls ? st.content_urls.desktop.page : 'https:\/\/pl.wikipedia.org/wiki/' + encodeURIComponent(tytulPl.replace(/ /g, '_')) };
+      try { localStorage.setItem(klucz, JSON.stringify({ t: Date.now(), d: dane })); } catch (er) { /* bez pamięci */ }
+      return dane;
+    });
+  });
+}
+
+function kartaOStacji(id, box) {
+  const d = daneStacji(id), wl = (S.start.infoStacji || {})[id] || {};
+  const rysuj = (w) => {
+    w = w || {};
+    const pole = (etyk, wartosc, zrodlo) => (wartosc ? el('div', { class: 'info-pole' }, el('span', { class: 'sub' }, etyk, zrodlo ? [' · ', typeof zrodlo === 'string' ? zrodlo : zrodlo.cloneNode(true)] : null), el('div', {}, wartosc)) : null);
+    const wd = w.q ? 'Wikidata' : null, ty = 'Twoje';
+    const auto = (window.STACJE_DANE || {})[id] || {}, wp = auto.zrodloInfo ? el('a', { href: auto.zrodloInfo, target: '_blank', rel: 'noopener' }, 'Wikipedia') : 'Wikipedia';
+    // kolejność: Twoje wpisy → Wikipedia (infobox, narzedzia/stacje.json) → Wikidata
+    const z = (k, wdW) => (wl[k] ? [wl[k], ty] : auto[k] ? [auto[k], wp] : wdW ? [wdW, wd] : [null]);
+    const [miasto, zM] = z('miasto', [w.miasto, w.kraj].filter(Boolean).join(' · ')), [zal, zZ] = z('zalozona', w.zalozona), [form, zF] = z('format', w.gatunki);
+    const [wlas, zW] = z('wlasciciel', w.wlasciciel), [gat, zG] = z('gatunki', null);
+    const www = wl.www || d.www || w.www;
+    const bio = wl.bio || w.bio;
+    box.replaceChildren(
+      el('div', { class: 'info-siatka' },
+        pole('Strona', www ? el('a', { href: www, target: '_blank', rel: 'noopener', style: { overflowWrap: 'anywhere' } }, www.replace(/^https?:\/\/(www\.)?/, '').replace(/\/$/, '')) : null, wl.www ? ty : null),
+        pole('Skąd', miasto, zM), pole('Powstała', zal, zZ), pole('Format / gatunek', form, zF), pole('Gatunki', gat, zG),
+        pole('Właściciel', wlas, zW), pole('Częstotliwość', w.czestotliwosc, wd), pole('Grupa (w panelu)', (S.start.grupy || {})[id] || 'Pozostałe', wl.grupa ? ty : null),
+        pole('Grupa docelowa', wl.grupaDocelowa, ty), wl.udzial ? pole('Udział w rynku', wl.udzial, ty) : null, pole('Słuchalność', wl.sluchalnosc ? wl.sluchalnosc + (wl.zrodloSluchalnosci ? ' (' + wl.zrodloSluchalnosci + ')' : '') : null, ty)),
+      rynekStacji(auto.rynek),
+      rynekLokalny(id),
+      bio ? el('p', { class: 'opis', style: { marginTop: '10px', fontSize: '14px', color: 'var(--tekst2)' } }, bio.length > 700 ? bio.slice(0, 700) + '…' : bio) : null,
+      el('div', { class: 'wiersz', style: { marginTop: '8px' } },
+        w.link && !wl.bio ? el('a', { href: w.link, target: '_blank', rel: 'noopener', class: 'sub' }, 'Wikipedia') : null,
+        w.q ? el('a', { href: 'https:\/\/www.wikidata.org/wiki/' + w.q, target: '_blank', rel: 'noopener', class: 'sub' }, 'Wikidata ' + w.q) : null,
+        !wl.udzial && !auto.rynek && !miastaStacji(id).length ? el('span', { class: 'sub' }, 'Udział w rynku: tej stacji nie ma w wynikach Radio Track (ogólnopolskich ani w 16 miastach KBR) – możesz go wpisać w edycji (z datą i źródłem).') : null,
+        el('button', { class: 'przycisk drugi maly', onclick: () => edytujStacje(id) }, 'Edytuj')));
+  };
+  const tytul = d.wiki;
+  if (!tytul) { rysuj(null); return; }
+  rysuj(null);
+  wikiStacji(tytul).then(rysuj).catch(() => rysuj(null));
+}
+
+/** Udział w czasie słuchania (Radio Track, Kantar) z porównaniem z poprzednią falą i rokiem wcześniej. */
+function rynekStacji(r) {
+  if (!r) return null;
+  const zm = (a, b) => { const d = Math.round((a - b) * 10) / 10; return el('span', { class: 'zm ' + (d > 0 ? 'w' : d < 0 ? 's' : '') }, (d > 0 ? '▲ ' : d < 0 ? '▼ ' : '= ') + Math.abs(d).toLocaleString('pl-PL') + ' pp'); };
+  const p = (v) => v.toLocaleString('pl-PL', { minimumFractionDigits: 1 }) + '%';
+  return el('div', { class: 'rynek' },
+    el('div', {}, el('span', { class: 'sub' }, 'Udział w czasie słuchania' + (r.rodzaj === 'sieć' ? ' (sieć)' : '') + ' · ' + r.fala), el('div', { class: 'rynek-w' }, p(r.udzial))),
+    el('div', { class: 'sub' }, 'vs ' + r.falaPoprzednia + ': ', zm(r.udzial, r.poprzednio), el('br'), 'vs ' + r.falaRokTemu + ': ', zm(r.udzial, r.rokTemu)),
+    el('a', { class: 'sub', href: r.url, target: '_blank', rel: 'noopener', style: { gridColumn: '1 / -1' } }, 'Źródło: ' + r.zrodlo));
+}
+
+function udzialLokalnyKrotko(id) {
+  const l = miastaStacji(id);
+  return l.length && l.length <= 2 ? ' · ' + l[0].m.miasto + ' ' + l[0].s.udzial[l[0].m.fale.length - 1].toLocaleString('pl-PL') + '%' : '';
+}
+
+/** Karta „Ramówka” w profilu stacji: dni (wczoraj … +5), lista audycji, bieżąca wyróżniona, krótkie pozycje pod audycją. */
+const RAMOWKA_PROFIL = { dzien: 0 };
+function ramowkaStacji(id) {
+  const lista = el('div', { class: 'rp-lista' }, szkielet(1)), dni = el('div', { class: 'filtry rp-dni' });
+  const k = karta('Ramówka', null, dni, lista, el('div', { class: 'wiersz', style: { marginTop: '8px' } },
+    el('button', { class: 'przycisk drugi maly', onclick: () => idz('epg', id) }, 'Ramówki wszystkich stacji')));
+  const DNI_TYG = ['niedz.', 'pon.', 'wt.', 'śr.', 'czw.', 'pt.', 'sob.'];
+  const opisDnia = (n) => n === 0 ? 'Dziś' : n === 1 ? 'Jutro' : n === -1 ? 'Wczoraj' : DNI_TYG[new Date(dodajDni(dzisISO(), n) + 'T12:00').getDay()] + ' ' + dataPL(dodajDni(dzisISO(), n), false);
+  const ms = (iso) => Date.parse(iso + ':00');
+  function rysujDni() {
+    dni.replaceChildren(...[-1, 0, 1, 2, 3, 4, 5].map((n) => el('button', { class: 'chip' + (RAMOWKA_PROFIL.dzien === n ? ' akt' : ''), onclick: () => { RAMOWKA_PROFIL.dzien = n; rysujDni(); wczytaj(); } }, opisDnia(n))));
+  }
+  function wczytaj() {
+    const data = dodajDni(dzisISO(), RAMOWKA_PROFIL.dzien);
+    lista.replaceChildren(...szkielet(1));
+    serwerP('ramowka', data, [id]).then((r) => {
+      const l = (r.stacje || {})[id];
+      if (!Array.isArray(l)) {
+        lista.replaceChildren(el('p', { class: 'opis' }, l && l.blad ? 'Ramówka niedostępna: ' + l.blad : RAMOWKA_PROFIL.dzien !== 0 ? 'Ta stacja publikuje ramówkę tylko na bieżący dzień.' : 'Brak ramówki na ten dzień.'));
+        return;
+      }
+      if (!l.length) { lista.replaceChildren(el('p', { class: 'opis' }, 'Brak audycji na ten dzień.')); return; }
+      const poz = l.slice().sort((a, b) => (a.od < b.od ? -1 : a.od > b.od ? 1 : ms(b.do) - ms(a.do)));
+      // krótkie (≤ 30 min) w całości wewnątrz dłuższej audycji → „w trakcie” pod nią
+      const glowne = [], wstawki = new Map();
+      poz.forEach((a) => {
+        const dl = ms(a.do) - ms(a.od);
+        const rodzic = dl <= 30 * 6e4 && glowne.filter((g) => g.od <= a.od && g.do >= a.do && g !== a && ms(g.do) - ms(g.od) > dl).pop();
+        if (rodzic) { if (!wstawki.has(rodzic)) wstawki.set(rodzic, []); wstawki.get(rodzic).push(a); } else glowne.push(a);
+      });
+      const teraz = Date.now();
+      let biezacy = null;
+      lista.replaceChildren(...glowne.map((a) => {
+        const trwa = ms(a.od) <= teraz && ms(a.do) > teraz, minela = ms(a.do) <= teraz, w = wstawki.get(a) || [];
+        // krótkie samodzielne pozycje (serwis, aktualności ≤ 12 min) – cienki wiersz
+        if (ms(a.do) - ms(a.od) <= 12 * 6e4 && !w.length) {
+          const kr = el('button', { class: 'rp-w krotka' + (trwa ? ' trwa' : '') + (minela ? ' minela' : ''), onclick: () => szczegolyAudycji(id, a, trwa, []) },
+            el('span', { class: 'rp-g' }, String(a.od).slice(11, 16)), el('span', { class: 'rp-p' }, a.tytul));
+          if (trwa) biezacy = kr;
+          return kr;
+        }
+        const wiersz = el('button', { class: 'rp-w' + (trwa ? ' trwa' : '') + (minela ? ' minela' : ''), onclick: () => szczegolyAudycji(id, a, trwa, w) },
+          el('span', { class: 'rp-g' }, String(a.od).slice(11, 16), el('small', {}, String(a.do).slice(11, 16))),
+          el('span', { class: 'rp-t' },
+            el('b', {}, a.tytul, trwa ? el('span', { class: 'rp-teraz' }, 'teraz') : null),
+            a.prowadzacy ? el('span', { class: 'rp-p' }, a.prowadzacy) : null,
+            w.length ? el('span', { class: 'rp-p rp-wst' }, w.map((x) => String(x.od).slice(11, 16) + ' ' + x.tytul).join(' · ')) : null,
+            trwa ? el('span', { class: 'tk-postep' }, el('i', { style: { width: Math.round(100 * (teraz - ms(a.od)) / (ms(a.do) - ms(a.od))) + '%' } })) : null));
+        if (trwa) biezacy = wiersz;
+        return wiersz;
+      }));
+      // przewiń listę do bieżącej audycji (tylko wewnątrz listy, nie całą stronę)
+      if (biezacy) requestAnimationFrame(() => { lista.scrollTop = Math.max(0, biezacy.offsetTop - 8); });
+    }).catch((e) => lista.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  }
+  rysujDni(); wczytaj();
+  return k;
+}
+
+/** Miasta z tabel KBR, w których mierzona jest stacja: [{m (tabela miasta), s (wiersz stacji), miejsce}] – najwyższy udział pierwszy. */
+function miastaStacji(id) {
+  const R = window.RYNEK_MIASTA;
+  if (!R) return [];
+  const wynik = [];
+  Object.keys(R.miasta).forEach((k) => {
+    const m = R.miasta[k], o = m.fale.length - 1;
+    const posort = m.stacje.filter((x) => x.udzial[o] != null).sort((a, b) => b.udzial[o] - a.udzial[o]);
+    m.stacje.forEach((s) => { if (s.slug === id && s.udzial[o] != null) wynik.push({ m, s, miejsce: posort.indexOf(s) + 1, z: posort.length }); });
+  });
+  return wynik.sort((a, b) => b.s.udzial[b.m.fale.length - 1] - a.s.udzial[a.m.fale.length - 1]);
+}
+
+/** Udział w miastach (Radio Track, tabele KBR). Stacja lokalna: ranking jej miasta z wyróżnieniem; ogólnopolska: tabela miast. */
+function rynekLokalny(id) {
+  const lista = miastaStacji(id), R = window.RYNEK_MIASTA;
+  if (!lista.length) return null;
+  const p = (v) => v == null ? '–' : v.toLocaleString('pl-PL', { minimumFractionDigits: 1 }) + '%';
+  const zm = (a, b) => { if (a == null || b == null) return el('span', { class: 'zm' }, '–'); const d = Math.round((a - b) * 10) / 10; return el('span', { class: 'zm ' + (d > 0 ? 'w' : d < 0 ? 's' : '') }, (d > 0 ? '▲ ' : d < 0 ? '▼ ' : '= ') + Math.abs(d).toLocaleString('pl-PL') + ' pp'); };
+  const fala = lista[0].m.fale[lista[0].m.fale.length - 1], poprz = lista[0].m.fale[lista[0].m.fale.length - 2];
+  const pasek = (v, max, moja) => el('span', { class: 'rl-pasek' + (moja ? ' moja' : '') }, el('i', { style: { width: Math.max(2, Math.round(100 * v / max)) + '%' } }));
+  const naglowek = el('div', { class: 'rl-nagl' }, el('b', {}, 'Udział w czasie słuchania w miastach'), el('span', { class: 'sub' }, ' · ' + fala + ' (vs ' + poprz + ')'));
+  const zrodlo = el('div', { class: 'sub rl-zr' }, 'Źródło: ', R.zrodlo, ' · tabele: ', el('a', { href: 'https:\/\/badaniaradiowe.pl/wyniki-sluchalnosci/', target: '_blank', rel: 'noopener' }, 'badaniaradiowe.pl'), ' (pobrane ' + R.pobrano + ')');
+  let tresc;
+  if (lista.length <= 2) {
+    // stacja lokalna: ranking miasta – czołówka + ta stacja
+    tresc = lista.map(({ m, s, miejsce, z }) => {
+      const o = m.fale.length - 1, posort = m.stacje.filter((x) => x.udzial[o] != null).sort((a, b) => b.udzial[o] - a.udzial[o]);
+      const pokaz = posort.filter((x, i) => i < 6 || x === s), max = posort[0].udzial[o];
+      return el('div', { class: 'rl-miasto' },
+        el('div', { class: 'rl-tyt' }, el('a', { href: m.url, target: '_blank', rel: 'noopener' }, m.miasto), el('span', { class: 'sub' }, ' · ' + miejsce + '. miejsce z ' + z + ' · próba N = ' + (m.n ? m.n[o].toLocaleString('pl-PL') : '?'))),
+        el('div', { class: 'rl-tab' }, pokaz.map((x) => el('div', { class: 'rl-w' + (x === s ? ' moja' : '') },
+          el('span', { class: 'rl-m' }, (posort.indexOf(x) + 1) + '.'), el('span', { class: 'rl-n', title: x.nazwa }, x.nazwa),
+          pasek(x.udzial[o], max, x === s), el('b', {}, p(x.udzial[o])), zm(x.udzial[o], x.udzial[o - 1])))),
+        el('div', { class: 'sub' }, 'Ta stacja w kolejnych falach: ', m.fale.map((f, i) => f.replace(/ (\d{4})/g, ' $1') + ': ' + p(s.udzial[i])).join(' · ')));
+    });
+  } else {
+    const max = Math.max(...lista.map((x) => x.s.udzial[x.m.fale.length - 1]));
+    tresc = el('div', { class: 'rl-tab' }, lista.map(({ m, s, miejsce, z }) => {
+      const o = m.fale.length - 1;
+      return el('div', { class: 'rl-w', title: s.nazwa + ' · N = ' + (m.n ? m.n[o] : '?') },
+        el('span', { class: 'rl-n' }, el('a', { href: m.url, target: '_blank', rel: 'noopener' }, m.miasto)),
+        el('span', { class: 'rl-m sub' }, miejsce + '/' + z), pasek(s.udzial[o], max, false), el('b', {}, p(s.udzial[o])), zm(s.udzial[o], s.udzial[o - 1]));
+    }));
+  }
+  return el('div', { class: 'rynek-lok' }, naglowek, tresc, zrodlo);
+}
+
+/** „Co gra”: wykonawcy, gatunki, dekady, język – z 50 najczęściej granych utworów okresu. */
+function coGra(box, p) {
+  const top = p.top || [];
+  if (!top.length) { box.replaceChildren(el('p', { class: 'opis' }, 'Brak emisji w tym okresie.')); return; }
+  const suma = (f) => { const w = {}; top.forEach((x) => [].concat(f(x) || []).forEach((k) => { if (k) w[k] = (w[k] || 0) + x.n; })); return Object.entries(w).sort((a, b) => b[1] - a[1]); };
+  const wsz = top.reduce((s, x) => s + x.n, 0);
+  const wyk = suma((x) => String(x.a).split(/\s+(?:\/|&|feat\.?|ft\.?|x)\s+/i)[0]).slice(0, 8);
+  const gat = suma((x) => x.g).slice(0, 8), gatZnane = top.filter((x) => x.g && x.g.length).reduce((s, x) => s + x.n, 0);
+  const dek = suma((x) => (x.y ? Math.floor(x.y / 10) * 10 + 's' : null)), lataZnane = top.filter((x) => x.y).reduce((s, x) => s + x.n, 0);
+  const pl = top.filter((x) => x.c === 'PL').reduce((s, x) => s + x.n, 0), kraj = top.filter((x) => x.c).reduce((s, x) => s + x.n, 0);
+  // lista pasków: 8 pierwszych, reszta po „Pokaż wszystkie”
+  const pasek = (lista, mian) => listaRozwijana(lista.map(([k, v]) => el('div', { style: { display: 'grid', gridTemplateColumns: 'minmax(90px, 1fr) 2fr auto', gap: '8px', alignItems: 'center', fontSize: '14px' } },
+    el('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, k), el('div', { class: 'pasek' }, el('i', { style: { width: (100 * v / lista[0][1]).toFixed(1) + '%' } })), el('span', { class: 'sub num' }, proc(v / mian)))), 8, 'lista-paskow');
+  const glDek = dek.slice(0, 2).map((x) => x[0]).join(' i ');
+  box.replaceChildren(
+    el('p', { style: { marginBottom: '10px' } }, `W skrócie: ${kraj ? proc(pl / kraj) + ' polskich wykonawców, ' : ''}${glDek ? 'najwięcej utworów z lat ' + glDek : 'lata wydania jeszcze nieznane'}${gat.length ? ', przeważa ' + gat[0][0] : ''}.`),
+    el('div', { class: 'siatka3' },
+      el('div', {}, el('h3', {}, 'Wykonawcy'), pasek(wyk, wsz)),
+      el('div', {}, el('h3', {}, 'Gatunki'), gat.length ? pasek(gat, gatZnane) : el('p', { class: 'sub' }, 'Gatunki znamy tylko dla utworów z bazy Songstera.'), gatZnane ? el('p', { class: 'sub' }, 'Znane dla ' + proc(gatZnane / wsz) + ' emisji') : null),
+      el('div', {}, el('h3', {}, 'Dekady wydania'), dek.length ? pasek(dek, lataZnane) : el('p', { class: 'sub' }, 'Brak lat wydania.'), lataZnane ? el('p', { class: 'sub' }, 'Znane dla ' + proc(lataZnane / wsz) + ' emisji') : null)));
+}
+
+/** Formularz edycji stacji (nazwa, logo, strona, artykuł Wikipedii, grupa, informacje, słuchalność). */
+function edytujStacje(id) {
+  const wl = Object.assign({}, (S.start.infoStacji || {})[id] || {}), auto = (window.STACJE_DANE || {})[id] || {};
+  const pola = [
+    ['nazwa', 'Nazwa', S.jedn[id] ? (S.jedn[id]._nazwaDomyslna || S.jedn[id].nazwa) : id],
+    ['www', 'Strona WWW', auto.www || 'https:\/\/…'], ['wiki', 'Artykuł w polskiej Wikipedii (tytuł)', auto.wiki || 'np. Radio Poznań'],
+    ['grupa', 'Grupa (filtr w Stacjach i Ramówkach)', (S.start.grupy || {})[id] || 'Pozostałe'],
+    ['miasto', 'Skąd (miasto, region)', 'z Wikidata, jeśli puste'], ['zalozona', 'Powstała', 'np. 1993 albo 15.04.1993'],
+    ['format', 'Format / gatunek', 'np. AC, CHR, rock, publicystyka'], ['gatunki', 'Gatunki muzyczne', 'np. pop, rock, dance'],
+    ['wlasciciel', 'Właściciel', 'z Wikidata, jeśli puste'], ['grupaDocelowa', 'Grupa docelowa', 'np. 25–49, mieszkańcy miast'],
+    ['udzial', 'Udział w rynku', 'np. 9,8% (Radio Track, VII–IX 2026)'], ['sluchalnosc', 'Słuchalność / zasięg', 'np. 4,1 mln dziennie'],
+    ['zrodloSluchalnosci', 'Źródło i data słuchalności', 'np. Radio Track Kantar, III kw. 2026'],
+  ];
+  const wejscia = {};
+  const grupy = [...new Set(Object.values(S.start.grupy || {}).concat(['Pozostałe']))];
+  const lista = el('datalist', { id: 'grupy-lista' }, grupy.map((g) => el('option', { value: g })));
+  const bio = el('textarea', { rows: 5, style: { width: '100%' }, placeholder: 'Bio – puste = streszczenie z Wikipedii' }); bio.value = wl.bio || '';
+  const podglad = logo(id, 'd');
+  const plik = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/webp,image/svg+xml' });
+  let noweLogo;
+  plik.addEventListener('change', () => {
+    const f = plik.files[0]; if (!f) return;
+    const img = new Image();
+    img.onload = () => {   // zmniejszenie do 96 × 96 (kwadrat, białe tło przy przezroczystości tylko dla JPG)
+      const c = document.createElement('canvas'); c.width = c.height = 96;
+      const k = Math.min(96 / img.width, 96 / img.height), w = img.width * k, h = img.height * k;
+      c.getContext('2d').drawImage(img, (96 - w) / 2, (96 - h) / 2, w, h);
+      noweLogo = c.toDataURL('image/png');
+      const nowy = el('img', { class: 'logo d', src: noweLogo, alt: '' }); box.querySelector('.logo.d').replaceWith(nowy);
+      URL.revokeObjectURL(img.src);
+    };
+    img.src = URL.createObjectURL(f);
+  });
+  const box = el('div', { style: { display: 'grid', gap: '10px' } },
+    el('h2', {}, 'Edytuj stację'),
+    el('div', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, podglad, el('div', { style: { display: 'grid', gap: '6px' } }, el('label', { class: 'sub' }, 'Logo (PNG, JPG, WebP, SVG – zmniejszane do 96 px)'), plik,
+      wl.logo ? el('button', { class: 'przycisk drugi maly', onclick: () => { noweLogo = ''; toast('Logo wróci do domyślnego po zapisaniu'); } }, 'Przywróć domyślne logo') : null)),
+    lista,
+    el('div', { class: 'info-siatka formularz' }, pola.map(([k, n, ph]) => {
+      const i = el('input', { type: 'text', value: wl[k] || '', placeholder: ph, style: { width: '100%' } });
+      if (k === 'grupa') i.setAttribute('list', 'grupy-lista');
+      wejscia[k] = i;
+      return el('label', { style: { display: 'grid', gap: '3px' } }, el('span', { class: 'sub' }, n), i);
+    })),
+    el('label', { style: { display: 'grid', gap: '3px' } }, el('span', { class: 'sub' }, 'Bio'), bio),
+    el('p', { class: 'sub' }, 'Puste pole = wartość automatyczna (Wikidata, Wikipedia, odSluchane). Zmiany widzisz tylko Ty; zapisywane w pliku stacje_info.json w folderze danych na Dysku.'),
+    el('div', { class: 'wiersz', style: { justifyContent: 'flex-end' } },
+      el('button', { class: 'przycisk drugi', onclick: zamknijArkusz }, 'Anuluj'),
+      el('button', { class: 'przycisk', onclick: (e) => {
+        const zm = { bio: bio.value };
+        Object.entries(wejscia).forEach(([k, i]) => { zm[k] = i.value; });
+        if (noweLogo !== undefined) zm.logo = noweLogo;
+        e.currentTarget.disabled = true;
+        serwer('zapiszInfoStacji', id, zm).then((w) => {
+          S.start.infoStacji = w.info; S.start.grupy = w.grupy;
+          zastosujInfoStacji(); rysujUlubioneMenu();
+          _pamiec.forEach((v, kk) => { if (kk.startsWith('ramowka')) _pamiec.delete(kk); });
+          zamknijArkusz(); toast('Zapisano'); idz('stacja', id, true);
+        }).catch((er) => { e.currentTarget.disabled = false; toast(er.message, 5000); });
+      } }, 'Zapisz')));
+  otworzArkusz(box);
+}
+</script>

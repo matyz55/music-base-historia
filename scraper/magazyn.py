@@ -90,6 +90,20 @@ class MagazynDysk:
     # (starsza wersja Odbiornika pole ignoruje i czeka jak dotąd)
     kolejka = False
 
+    def lista_partiami(self, akcja: str, **dane) -> list:
+        """Lista plików z Odbiornika partiami (kursor od/dalej – Apps Script ma limit 6 min na wywołanie)."""
+        pliki, od = [], 0
+        while True:
+            odp = self.wyslij(akcja, od=od, **dane)
+            if not odp.get("ok"):
+                raise RuntimeError(f"{akcja}: {odp.get('blad')}")
+            if "pliki" not in odp:
+                raise RuntimeError("Odbiornik nie zna tego trybu – zaktualizuj OdbiornikEksport.gs")
+            pliki += odp["pliki"]
+            if odp.get("dalej") is None:
+                return pliki
+            od = odp["dalej"]
+
     def wyslij(self, akcja: str, **dane) -> dict:
         if self.kolejka:
             dane["kolejka"] = True

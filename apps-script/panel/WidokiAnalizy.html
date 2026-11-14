@@ -1,0 +1,632 @@
+<script>
+'use strict';
+// ======================= Analizy (N1–N10), ramówki (EPG), playlisty, alerty i ustawienia =======================
+
+// ---------------- ANALIZY ----------------
+const ANALIZY = [
+  ['kwota', 'Kwota polska', 'N1'], ['rotacja', 'Rotacja', 'N2'], ['trendy', 'Cykl hitu i trendy', 'N3'], ['wiek', 'Wiek repertuaru', 'N4'],
+  ['pory', 'Pory dnia', 'N5'], ['podobienstwo', 'Mapa podobieństwa', 'N6'], ['format', 'Zmiany formatu', 'N7'], ['pary', 'Co po czym', 'N8'], ['skoki', 'Skoki wykonawców', 'N9'],
+  ['kategorie', 'Kategorie rotacji', 'A3'], ['wskazniki', 'Wskaźniki stacji', 'A1'], ['zasieg', 'Zasięg emisji', 'A6'], ['kompletnosc', 'Kompletność danych', 'A14'],
+];
+const A = { tab: 'kwota', j: null };
+// domyślnie „wszystkie stacje łącznie” (serwer sumuje stacje główne; sieci bez podwójnego liczenia)
+function stacjaAnalizy() { return A.j && (S.jedn[A.j] || A.j === '_wszystkie') ? A.j : '_wszystkie'; }
+function wyborJednej(naZmiane) {
+  const s = el('select', { 'aria-label': 'Stacja' }, [el('option', { value: '_wszystkie' }, 'Wszystkie stacje łącznie')].concat(
+    S.start.jednostki.slice().sort((a, b) => porownajStacje(a.id, b.id)).map((j) => el('option', { value: j.id }, j.nazwa))));
+  s.value = stacjaAnalizy();
+  s.addEventListener('change', () => { A.j = s.value; naZmiane(); });
+  return s;
+}
+
+WIDOKI.analizy = (box, tab) => {
+  if (tab && ANALIZY.some((x) => x[0] === tab)) A.tab = tab;
+  const wynik = el('div', { style: { display: 'grid', gap: '14px' } });
+  const odswiez = () => idz('analizy', A.tab, true);
+  const potrzebujeStacji = ['rotacja', 'pory', 'format', 'pary', 'kategorie'].includes(A.tab);
+  box.replaceChildren(el('h1', {}, 'Analizy'),
+    el('div', { class: 'zakladki', role: 'tablist' }, ANALIZY.map(([id, n]) => el('button', { class: A.tab === id ? 'akt' : '', role: 'tab', 'aria-selected': String(A.tab === id), onclick: () => idz('analizy', id) }, n))),
+    pasekFiltrow(odswiez, { stacje: !potrzebujeStacji && !['podobienstwo', 'trendy', 'skoki', 'wskazniki', 'zasieg', 'kompletnosc'].includes(A.tab) }),
+    przyciskZapiszWidok('analizy', A.tab),
+    potrzebujeStacji ? el('div', { class: 'wiersz' }, el('span', { class: 'sub' }, 'Stacja:'), wyborJednej(odswiez)) : null,
+    wynik);
+  wynik.append(...szkielet(2));
+  const tabA = A.tab;
+  (ANALIZA[tabA] || (() => {}))(wynik);
+  // N1: zdanie „W skrócie” nad wynikami – z tych samych zapytań co analiza (są już w pamięci, serwer nie liczy drugi raz)
+  if (W_SKROCIE[tabA]) W_SKROCIE[tabA]().then((t) => {
+    if (!t || S.widok !== 'analizy' || A.tab !== tabA) return;
+    const st = wynik.querySelector('.w-skrocie'); if (st) st.remove();
+    wynik.prepend(el('p', { class: 'w-skrocie' }, el('b', {}, 'W skrócie: '), t));
+  }).catch(() => {});
+};
+const W_SKROCIE = {
+  kwota: () => serwerP('kwotaPolska', S.wybrane, S.od, S.do).then((r) => {
+    const z = r.stacje.filter((x) => x.pokrycie >= 0.3 && x.udzialPL != null).sort((a, b) => b.udzialPL - a.udzialPL);
+    if (!z.length) return null;
+    return `najwięcej utworów po polsku gra ${z[0].nazwa} (${proc(z[0].udzialPL)}), najmniej ${z[z.length - 1].nazwa} (${proc(z[z.length - 1].udzialPL)}); poniżej 33%: ${z.filter((x) => x.udzialPL < 0.33).length} z ${z.length} stacji (wśród utworów o znanym języku, emisje, nie czas).`;
+  }),
+  rotacja: () => serwerP('rotacja', stacjaAnalizy(), S.od, S.do).then((r) => (r.utworow ? `${r.nazwa}: ${fmt(r.emisji)} emisji ${fmt(r.utworow)} różnych utworów, średnio ${fmt(r.emisji / r.utworow, 1)} emisji na utwór; najczęściej ${r.top[0].a} – ${r.top[0].t} (${fmt(r.top[0].n)}×).` : null)),
+  trendy: () => serwerP('cyklZycia', S.od, S.do, A.min || 30).then((r) => (r.stacje && r.stacje.length ? `nowości najwcześniej gra ${r.stacje[0].nazwa}; ${fmt(r.debiutow)} utworów zadebiutowało w tym okresie.` : null)),
+  wiek: () => serwerP('wiekRepertuaru', (S.wybrane.length ? S.wybrane : ['_wszystkie']).slice(0, 6), S.od.slice(0, 4), S.do.slice(0, 4)).then((r) => {
+    const z = r.stacje.map((s) => { let su = 0, n = 0; s.miesiace.forEach((m) => { if (m.sredniRok != null) { su += m.sredniRok * m.zRokiem; n += m.zRokiem; } }); return n ? [s.nazwa, su / n] : null; }).filter(Boolean).sort((a, b) => a[1] - b[1]);
+    if (!z.length) return null;
+    return z.length === 1 ? `średni rok wydania granych utworów: ${fmt(z[0][1])} (${z[0][0]}).` : `najstarszy repertuar: ${z[0][0]} (śr. ${fmt(z[0][1])}), najnowszy: ${z[z.length - 1][0]} (śr. ${fmt(z[z.length - 1][1])}).`;
+  }),
+  wskazniki: () => serwerP('wskazniki', S.od, S.do).then((r) => {
+    const z = r.stacje.filter((x) => x.hill1 != null && x.emisji >= 300); if (z.length < 2) return null;
+    const h = z.slice().sort((a, b) => b.hill1 - a.hill1), u = z.slice().sort((a, b) => b.unikalnosc - a.unikalnosc);
+    return `najbardziej różnorodna playlista: ${h[0].nazwa} (N1 = ${fmt(h[0].hill1)}), najmniej: ${h[h.length - 1].nazwa} (${fmt(h[h.length - 1].hill1)}); najwięcej utworów granych tylko u siebie: ${u[0].nazwa} (${proc(u[0].unikalnosc)} emisji).`;
+  }),
+  kompletnosc: () => serwerP('kompletnoscDanych', S.do).then((r) => { if (!r.stacje.length) return null; const z = r.stacje.filter((x) => x.kompletnosc < 0.8); return z.length ? `poniżej 80% oczekiwanych danych w ostatnich 7 dniach: ${z.map((x) => x.nazwa + ' (' + proc(x.kompletnosc) + ')').join(', ')}.` : 'wszystkie stacje mają w ostatnich 7 dniach co najmniej 80% zwykłej liczby utworów.'; }),
+  pory: () => serwerP('poryDnia', stacjaAnalizy(), S.od, S.do).then((r) => { const g = r.godziny.slice().sort((a, b) => b.emisji - a.emisji); return g[0].emisji ? `${r.nazwa}: najwięcej utworów o ${g[0].h}:00, najmniej o ${g[23].h}:00.` : null; }),
+  podobienstwo: () => serwerP('podobienstwoStacji', S.od, S.do).then((r) => {
+    const p = []; r.stacje.forEach((a, i) => r.stacje.forEach((b, j) => { if (j > i) p.push([a.nazwa, b.nazwa, r.macierz[i][j]]); }));
+    if (!p.length) return null; p.sort((x, y) => y[2] - x[2]);
+    return `najbardziej podobne: ${p[0][0]} i ${p[0][1]} (${proc(p[0][2])}); najbardziej różne: ${p[p.length - 1][0]} i ${p[p.length - 1][1]} (${proc(p[p.length - 1][2])}).`;
+  }),
+  format: () => serwerP('zmianyFormatu', stacjaAnalizy(), S.od.slice(0, 7), S.do.slice(0, 7)).then((r) => {
+    if (r.miesiace.length < 3) return null;
+    const z = r.miesiace.filter((m) => m.zmiana);
+    return z.length ? `${r.nazwa}: możliwa zmiana formatu w ${z.map((m) => miesPL(m.m)).join(', ')}.` : `${r.nazwa}: bez wyraźnych zmian formatu (średnie podobieństwo miesięcy ${proc(r.srednia)}).`;
+  }),
+  pary: () => serwerP('coPoCzym', stacjaAnalizy(), roznicaDni(S.od, S.do) > 92 ? dodajDni(S.do, -92) : S.od, S.do).then((r) => (r.pary && r.pary.length ? `najczęstsza para: ${r.pary[0].zNazwa} → ${r.pary[0].naNazwa} (${fmt(r.pary[0].razy)}×).` : null)),
+  skoki: () => serwerP('skokiWykonawcow', roznicaDni(S.od, S.do) > 185 ? dodajDni(S.do, -185) : S.od, S.do).then((r) => (r.skoki && r.skoki.length ? `największy skok: ${r.skoki[0].wykonawca} ${dataPL(r.skoki[0].dzien)} – ${fmt(r.skoki[0].emisji)} emisji wobec zwykle ${fmt(r.skoki[0].zwykle, 1)}.` : null)),
+  kategorie: () => (stacjaAnalizy() === '_wszystkie' ? serwerP('kategorieRotacjiWszystkie', S.od, S.do).then((r) => {
+    const z = r.stacje.filter((x) => x.emisji > 100); if (!z.length) return null;
+    const pw = z.slice().sort((a, b) => (b.podsum.power.udzial - a.podsum.power.udzial)), gd = z.slice().sort((a, b) => (b.podsum.gold.udzial - a.podsum.gold.udzial));
+    return `najmocniej na power stawia ${pw[0].nazwa} (${proc(pw[0].podsum.power.udzial)} emisji)` + (gd[0].podsum.gold.udzial > 0 ? `, najwięcej gold gra ${gd[0].nazwa} (${proc(gd[0].podsum.gold.udzial)}).` : '; gold/recurrent wymagają roku wydania – metadanych jeszcze za mało.');
+  }) : serwerP('kategorieRotacji', stacjaAnalizy(), S.od, S.do).then((r) => `${r.nazwa}: power ${proc(r.podsum.power.udzial)}, current ${proc(r.podsum.current.udzial)}, recurrent ${proc(r.podsum.recurrent.udzial)}, gold ${proc(r.podsum.gold.udzial)} emisji.`)),
+};
+
+const ANALIZA = {};
+const blad = (box) => (e) => bladW(box, e);
+const stacjaKomorka = (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), x.nazwa);
+
+// A3: kategorie rotacji – zestawienie wszystkich stacji albo utwory jednej stacji w każdej roli
+const KAT_ROT = [['power', 'Power', 'var(--s2)', 'najczęściej grane'], ['current', 'Current', 'var(--s3)', 'nowości w rotacji'], ['recurrent', 'Recurrent', 'var(--s1)', 'niedawne przeboje'],
+  ['gold', 'Gold', 'var(--s4)', 'starsze utwory'], ['sporadyczne', 'Sporadyczne', 'var(--tekst3)', 'rzadziej niż raz w tygodniu']];
+const paskiKategorii = (podsum) => el('div', { class: 'pasek-kat', role: 'img', 'aria-label': 'Udział kategorii w emisjach' },
+  KAT_ROT.map(([k, n, kol]) => podsum[k] && podsum[k].udzial ? el('i', { title: n + ': ' + proc(podsum[k].udzial), style: { width: (podsum[k].udzial * 100).toFixed(2) + '%', background: kol } }) : null));
+const legendaKategorii = () => el('div', { class: 'legenda' }, KAT_ROT.map(([, n, kol, op]) => el('span', { style: { '--kolor': kol } }, n + ' – ' + op)));
+function kategorieRotacji(box, j) {
+  box.replaceChildren(...szkielet(1));
+  serwerP('kategorieRotacji', j, S.od, S.do).then((r) => {
+    let akt = 'power';
+    const lista = el('div'), chipy = el('div', { class: 'filtry', style: { marginTop: '10px' } });
+    const rysuj = () => {
+      chipy.replaceChildren(...KAT_ROT.map(([k, n, kol]) => el('button', { class: 'chip' + (akt === k ? ' akt' : ''), style: { borderLeft: '4px solid ' + kol }, onclick: () => { akt = k; rysuj(); } },
+        n + ' · ' + fmt((r.podsum[k] || {}).utworow || 0) + ' utw. · ' + proc((r.podsum[k] || {}).udzial || 0))));
+      const ut = r.utwory.filter((x) => x.kat === akt);
+      lista.replaceChildren(tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisje', (x) => fmt(x.n), 'num', (x) => x.n],
+        ['Na tydzień', (x) => fmt(x.naTydzien, 1), 'num', (x) => x.naTydzien], ['Rok', (x) => x.y || '–', 'num tylko-szeroki', (x) => x.y || ''],
+        ['W bazie od', (x) => (x.pierwsza ? dataPL(x.pierwsza) : '–'), 'num tylko-szeroki', (x) => x.pierwsza || '']], ut,
+      { limit: 30, klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Kategoria ' + akt + ' – ' + r.nazwa + ' ' + S.od + ' ' + S.do, pusta: 'Brak utworów w tej kategorii.' }));
+    };
+    rysuj();
+    box.replaceChildren(paskiKategorii(r.podsum), legendaKategorii(),
+      el('p', { class: 'sub', style: { marginTop: '6px' } }, `${fmt(r.emisji)} emisji w ${fmt(r.tygodni, 1)} tyg.; power: co najmniej ${r.progPower ? fmt(r.progPower, 1) : '–'} emisji tygodniowo. Wiek: rok wydania, a gdy nieznany – pierwsza emisja w bazie (od 04.2023).`),
+      chipy, lista);
+  }).catch((e) => bladW(box, e));
+}
+ANALIZA.kategorie = (box) => {
+  const j = stacjaAnalizy();
+  if (j !== '_wszystkie') { const k = el('div'); box.replaceChildren(karta('Kategorie rotacji – ' + nazwa(j), 'Rola utworów w playliście stacji w wybranym okresie. Wybierz kategorię, by zobaczyć jej utwory i wyeksportować listę.', k)); kategorieRotacji(k, j); return; }
+  serwerP('kategorieRotacjiWszystkie', S.od, S.do).then((r) => {
+    box.replaceChildren(karta('Kategorie rotacji – każda stacja', 'Udział kategorii w emisjach stacji w wybranym okresie. Kliknij stację, by zobaczyć i wyeksportować utwory każdej kategorii (albo wybierz ją w polu „Stacja”).',
+      legendaKategorii(),
+      tabela([['Stacja', stacjaKomorka, null, (x) => x.nazwa], ['Rozkład', (x) => el('div', { style: { minWidth: '140px' } }, paskiKategorii(x.podsum)), null, () => '']]
+        .concat(KAT_ROT.map(([k, n]) => [n, (x) => proc((x.podsum[k] || {}).udzial || 0), 'num' + (k === 'sporadyczne' || k === 'recurrent' ? ' tylko-szeroki' : ''), (x) => (x.podsum[k] || {}).udzial || 0]))
+        .concat([['Próg power', (x) => (x.progPower ? fmt(x.progPower, 1) + '/tydz.' : '–'), 'num tylko-szeroki', (x) => x.progPower || '']]),
+      r.stacje, { klik: (x) => { A.j = x.id; idz('analizy', 'kategorie', true); }, nazwaEksportu: 'Kategorie rotacji ' + S.od + ' ' + S.do })));
+  }).catch(blad(box));
+};
+
+// N1
+ANALIZA.kwota = (box) => serwerP('kwotaPolska', S.wybrane, S.od, S.do).then((r) => {
+  const lista = r.stacje.slice().sort((a, b) => (b.udzialPL || 0) - (a.udzialPL || 0));
+  const bezJezyka = !lista.some((x) => x.pokrycie);
+  box.replaceChildren(karta('Utwory w języku polskim', 'Ustawa o radiofonii i telewizji (art. 15 ust. 2): co najmniej 33% miesięcznego czasu nadawania utworów słowno-muzycznych to utwory w języku polskim, z tego co najmniej 60% w godz. 5:00–24:00. ' +
+    'Tu liczymy emisje (nie czas) i tylko utwory o znanym języku tekstu (lrclib.net); instrumentalne pominięte. To szacunek, nie kontrola zgodności.',
+  tabela([['Stacja', stacjaKomorka, null, (x) => x.nazwa],
+    ['Po polsku', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px' } }, el('span', { class: 'pasek', style: { width: '90px', display: 'inline-block' } }, el('i', { style: { width: ((x.udzialPL || 0) * 100).toFixed(1) + '%', background: x.udzialPL != null && x.udzialPL < 0.33 ? 'var(--spadek)' : '' } })), proc(x.udzialPL)), 'num', (x) => x.udzialPL],
+    ['Z tego 5–24', (x) => proc(x.udzialPLwDzien), 'num', (x) => x.udzialPLwDzien],
+    ['Znany język', (x) => proc(x.pokrycie), 'num tylko-szeroki', (x) => x.pokrycie], ['Emisji', (x) => fmt(x.emisji), 'num tylko-szeroki', (x) => x.emisji]],
+  lista, { klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Kwota polska ' + S.od + ' ' + S.do, pusta: 'Brak danych o języku w tym okresie (metadane uzupełniają się każdej nocy).' }),
+  el('p', { class: 'sub', style: { marginTop: '8px' } }, 'Czerwony pasek: poniżej 33% wśród utworów o znanym języku. Przy pokryciu poniżej ok. 70% wynik może się jeszcze wyraźnie zmienić.')));
+  if (bezJezyka) box.prepend(infoMetadane(el('div', { class: 'karta' }), 'języka tekstu utworów (lrclib.net)'));
+  const zMies = lista.filter((x) => Object.keys(x.mies).length > 1).slice(0, 6);
+  if (zMies.length) {
+    const mies = [...new Set(zMies.flatMap((x) => Object.keys(x.mies)))].sort(), w = el('div', { class: 'wykres' });
+    box.append(karta('Miesiąc po miesiącu', 'Udział utworów po polsku wśród utworów o znanym języku (do 6 stacji z najwyższym udziałem).', w));
+    linie(w, mies.map(miesPL), zMies.map((x) => ({ nazwa: x.nazwa, jednostka: x.id, wartosci: mies.map((m) => (x.mies[m] && x.mies[m].znany ? x.mies[m].pl / x.mies[m].znany : null)) })), { format: proc, procenty: true, minY: 0 });
+  }
+}).catch(blad(box));
+
+// N2
+ANALIZA.rotacja = (box) => serwerP('rotacja', stacjaAnalizy(), S.od, S.do).then((r) => {
+  const godz = (h) => (h == null ? '–' : h < 48 ? fmt(h, 1) + ' h' : fmt(h / 24, 1) + ' dni');
+  box.replaceChildren(
+    kafle([['Emisji', fmt(r.emisji), r.nazwa], ['Różnych utworów', fmt(r.utworow), ''], ['Emisji na utwór', fmt(r.emisji / Math.max(1, r.utworow), 1), 'średnio']]),
+    karta('Najbardziej „zajechane”', 'Utwory z ≥ 20 emisjami, które wracają najczęściej (najkrótszy średni odstęp między emisjami).',
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisje', (x) => fmt(x.n), 'num'], ['Średni odstęp', (x) => godz(x.sredniOdstep), 'num', (x) => x.sredniOdstep],
+        ['Najkrótszy', (x) => godz(x.minOdstep), 'num tylko-szeroki', (x) => x.minOdstep], ['Maks. na dobę', (x) => fmt(x.maksDoba), 'num tylko-szeroki']], r.zajechane, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Zajechane ' + r.nazwa, pusta: 'Żaden utwór nie ma 20 emisji w tym okresie.' })),
+    karta('Najczęściej grane i jak często wracają', null,
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisje', (x) => fmt(x.n), 'num'], ['Dni z emisją', (x) => fmt(x.dni), 'num tylko-szeroki'], ['Średni odstęp', (x) => godz(x.sredniOdstep), 'num', (x) => x.sredniOdstep]],
+        r.top, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Rotacja ' + r.nazwa })));
+}).catch(blad(box));
+
+// N3
+ANALIZA.trendy = (box) => {
+  const min = el('select', { 'aria-label': 'Minimalna liczba emisji' }, [10, 30, 100, 300].map((n) => el('option', { value: n }, 'debiuty z ≥ ' + n + ' emisjami')));
+  min.value = A.min || 30;
+  min.addEventListener('change', () => { A.min = +min.value; ANALIZA.trendy(box); });
+  box.replaceChildren(el('div', { class: 'wiersz' }, min), ...szkielet(2));
+  serwerP('cyklZycia', S.od, S.do, +min.value).then((r) => {
+    const w = el('div', { class: 'wykres' });
+    box.replaceChildren(el('div', { class: 'wiersz' }, min),
+      karta('Stacje wyznaczające trendy', `Dla każdego z ${fmt(r.debiutow)} utworów, które zadebiutowały w tym okresie: kolejność, w jakiej stacje zagrały go pierwszy raz. Niższy średni percentyl = stacja gra nowości wcześniej niż inne. Liczą się utwory zagrane przez ≥ 5 stacji.`,
+        tabela([['', (x, i) => i + 1, 'num'], ['Stacja', stacjaKomorka, null, (x) => x.nazwa], ['Średnio', (x) => proc(x.srPercentyl), 'num', (x) => x.srPercentyl], ['Opóźnienie', (x) => (x.medianaOpoznienia == null ? '–' : fmt(x.medianaOpoznienia) + ' dni'), 'num', (x) => x.medianaOpoznienia], ['Pierwsza', (x) => fmt(x.pierwsza) + '×', 'num'], ['W pierwszej 3', (x) => fmt(x.wTop3) + '×', 'num tylko-szeroki'], ['Utworów', (x) => fmt(x.utworow), 'num tylko-szeroki']],
+          r.stacje, { klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Trendy ' + S.od + ' ' + S.do, pusta: 'Za mało debiutów granych przez ≥ 5 stacji – wybierz dłuższy okres albo niższy próg.' })),
+      karta('Cykl życia hitów', 'Najczęściej grane debiuty z tego okresu: emisje w całym radiu tydzień po tygodniu (do 6 na wykresie) – tygodnie, w których utwór był w pierwszej ' + fmt(r.zTop || 300) + ' całego radia.' + (r.odDebiutow ? ' Debiuty liczone od ' + dataPL(r.odDebiutow) + ' (okno 400 dni).' : ''), w,
+        tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Debiut', (x) => dataPL(x.debiut), 'num'], ['Pierwsza', (x) => x.pierwszaStacja || '–', 'tylko-szeroki'], ['Do szczytu', (x) => (x.dniDoSzczytu == null ? '–' : fmt(x.dniDoSzczytu) + ' dni'), 'num'],
+          ['Tygodni', (x) => fmt(x.tygodniNaAntenie), 'num tylko-szeroki'], ['Półtrwanie', (x) => (x.polowaTrwaniaTyg == null ? '–' : fmt(x.polowaTrwaniaTyg) + ' tyg.'), 'num tylko-szeroki', (x) => x.polowaTrwaniaTyg], ['Emisje', (x) => fmt(x.n), 'num']], r.hity, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Cykl życia ' + S.od + ' ' + S.do })));
+    if (r.dyfuzja && r.dyfuzja.length > 1) {   // A5: krzywa dyfuzji
+      const wd = el('div', { class: 'wykres' });
+      box.append(karta('Dyfuzja między stacjami', 'Średnio ile stacji gra już debiut po kolejnych tygodniach od pierwszej emisji w bazie. Kolumna „Opóźnienie” wyżej: mediana dni, o ile stacja zagrała debiut później niż pierwsza stacja.', wd));
+      linie(wd, r.dyfuzja.map((_, i) => i + '. tydz.'), [{ nazwa: 'Stacji', wartosci: r.dyfuzja }], { format: (v) => fmt(v, 1), minY: 0 });
+    }
+    const top = r.hity.slice(0, 6);
+    if (top.length) {
+      // oś: tygodnie od debiutu (0, 1, 2…), żeby porównać kształt krzywych
+      const dl = Math.min(52, Math.max(...top.map((h) => h.tygodnie.length ? roznicaDni(h.tygodnie[0][0], h.tygodnie[h.tygodnie.length - 1][0]) / 7 + 1 : 1)));
+      linie(w, Array.from({ length: dl }, (_, i) => 'tydz. ' + (i + 1)), top.map((h) => {
+        const mapa = Object.fromEntries(h.tygodnie), t0 = h.tygodnie[0] ? h.tygodnie[0][0] : null;
+        return { nazwa: h.t, wartosci: Array.from({ length: dl }, (_, i) => (t0 ? mapa[dodajDni(t0, 7 * i)] || 0 : null)) };
+      }), { format: (v) => fmt(v), minY: 0 });
+    }
+  }).catch(blad(box));
+};
+
+// A1, A2, A7–A13: jedna tabela wskaźników dla wszystkich stacji
+const opisWsk = {
+  hill1: ['Różnorodność N1', 'Liczba Hilla rzędu 1 = exp(entropia Shannona) emisji utworów: ile „równie często granych” utworów miałaby stacja o tej samej różnorodności. Więcej = bardziej zróżnicowana playlista.'],
+  hill2: ['Różnorodność N2', 'Liczba Hilla rzędu 2 = 1 / Σp² (odwrotność wskaźnika Herfindahla–Hirschmana): to samo, ale mocniej waży najczęściej grane utwory.'],
+  wymiana: ['Wymiana top 40', 'Średnio jaka część tygodniowego top 40 stacji zmienia się z tygodnia na tydzień (tylko pełne tygodnie).'],
+  unikalnosc: ['Unikalność', 'Udział emisji utworów, których w tym okresie nie grała żadna inna stacja w bazie.'],
+  powrotyWykonawcy60: ['Wykonawca ≤ 60 min', 'Udział emisji, po których ten sam (główny) wykonawca wraca na antenę w ciągu godziny.'],
+  medianaOdstepuWykonawcy: ['Odstęp wykonawcy', 'Mediana minut między kolejnymi emisjami tego samego wykonawcy.'],
+  dniDoPremiery: ['Dni od wydania', 'Mediana dni od daty wydania (metadane) do pierwszej emisji na stacji, dla utworów wydanych najwyżej rok przed okresem. Mniej = stacja szybciej gra premiery.'],
+  znajomosc: ['Znajomość', 'Średnia liczba emisji granego utworu w całej bazie (ważona emisjami stacji): jak mocno stacja stawia na znane piosenki. Przybliżenie – liczy też emisje po tym okresie.'],
+  minutMuzykiNaGodz: ['Min. muzyki / h', 'Minuty muzyki na godzinę anteny: suma długości utworów (MusicBrainz) / godziny z emisjami, przeskalowana przez pokrycie długością.'],
+  kwotaCzas: ['Polskie wg czasu', 'Udział czasu utworów po polsku w czasie utworów o znanym języku i długości (ustawa liczy czas, nie emisje). Bez premii debiutanta – wymaga daty pierwszej płyty.'],
+};
+ANALIZA.wskazniki = (box) => {
+  serwerP('wskazniki', S.od, S.do).then((r) => {
+    const st = r.stacje.filter((x) => x.hill1 != null), kol = (k, f) => [opisWsk[k][0], (x) => (x[k] == null ? '–' : f(x[k])), 'num', (x) => x[k]];
+    const zaMalo = r.zDlugoscia < 200;
+    box.replaceChildren(
+      karta('Wskaźniki stacji', `${dataPL(r.od)} – ${dataPL(r.do)}${r.od !== S.od ? ' (najwyżej 92 dni wstecz od końca okresu)' : ''}. Nagłówek kolumny sortuje; opis każdego wskaźnika poniżej tabeli.`,
+        tabela([['Stacja', stacjaKomorka, null, (x) => x.nazwa], kol('hill1', (v) => fmt(v)), kol('hill2', (v) => fmt(v)), kol('wymiana', proc), kol('unikalnosc', proc),
+          kol('powrotyWykonawcy60', proc), kol('medianaOdstepuWykonawcy', (v) => fmt(v) + ' min'), kol('dniDoPremiery', (v) => fmt(v)), kol('znajomosc', (v) => fmt(v)),
+          kol('minutMuzykiNaGodz', (v) => fmt(v, 1)), kol('kwotaCzas', proc)], st.sort((a, b) => b.hill1 - a.hill1), { klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Wskaźniki stacji ' + r.od + ' ' + r.do }),
+        el('details', { style: { marginTop: '10px' } }, el('summary', {}, 'Co znaczą wskaźniki'), el('dl', { class: 'sub' }, Object.values(opisWsk).map(([n, o]) => [el('dt', {}, el('b', {}, n)), el('dd', { style: { margin: '0 0 6px' } }, o)]))),
+        zaMalo ? el('p', { class: 'sub' }, `Długości utworów ma dopiero ${fmt(r.zDlugoscia)} utworów (zbierane od tej wersji z MusicBrainz przy uzupełnianiu metadanych) – „Min. muzyki / h” i „Polskie wg czasu” pojawią się, gdy pokrycie wzrośnie.`) : null),
+      karta('Różnorodność w grupach radiowych (A13)', `Średnie podobieństwo repertuaru par stacji tej samej grupy (część wspólna zbiorów utworów / ich suma) wobec par z różnych grup: ${proc(r.miedzyGrupami)}. Wyżej niż między grupami = grupa gra podobnie.`,
+        tabela([['Grupa', (g) => el('b', {}, g.grupa), null, (g) => g.grupa], ['Wewnątrz', (g) => proc(g.wewnatrz), 'num', (g) => g.wewnatrz], ['× między grupami', (g) => (r.miedzyGrupami ? fmt(g.wewnatrz / r.miedzyGrupami, 1) + '×' : '–'), 'num'], ['Stacje', (g) => g.stacji.join(', '), 'sub tylko-szeroki']], r.grupy, { nazwaEksportu: 'Grupy radiowe', pusta: 'Za mało stacji w grupach w tym okresie.' })));
+  }).catch(blad(box));
+};
+// A6: ile uszu – emisje × udział stacji w czasie słuchania (Radio Track, ostatnia fala)
+ANALIZA.zasieg = (box) => {
+  serwerP('wskazniki', S.od, S.do).then((r) => {
+    const udz = {}; Object.entries(window.STACJE_DANE || {}).forEach(([id, d]) => { if (d.rynek && d.rynek.udzial) udz[id] = d.rynek.udzial / 100; });
+    const zUdz = Object.keys(udz);
+    const lista = r.top.map((u) => {
+      let z = 0; Object.entries(u.na).forEach(([j, n]) => { if (udz[j]) z += n * udz[j]; });
+      return Object.assign({}, u, { zasieg: z, stacjiZUdzialem: Object.keys(u.na).filter((j) => udz[j]).length });
+    }).filter((u) => u.zasieg > 0).sort((a, b) => b.zasieg - a.zasieg);
+    const fala = (Object.values(window.STACJE_DANE || {}).find((d) => d.rynek && d.rynek.fala) || {}).rynek;
+    box.replaceChildren(karta('Zasięg emisji – „ile uszu”, nie „ile razy”', `Emisje utworu na każdej stacji × udział tej stacji w czasie słuchania radia (Radio Track${fala ? ', ' + fala.fala : ''}, ${zUdz.length} stacji z udziałem). Wynik to „emisje ważone udziałem”: 1 = jedna emisja na stacji ze 100% udziału. Przybliżenie – udział to średnia fali, nie słuchalność w godzinie emisji. ${dataPL(r.od)} – ${dataPL(r.do)}, 300 najczęściej granych utworów.`,
+      tabela([['', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Zasięg', (x) => fmt(x.zasieg, 1), 'num', (x) => x.zasieg], ['Emisji', (x) => fmt(x.n), 'num'], ['Stacji z udziałem', (x) => fmt(x.stacjiZUdzialem), 'num tylko-szeroki']],
+        lista, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Zasięg emisji ' + r.od + ' ' + r.do, pusta: 'Brak udziałów Radio Track dla stacji grających te utwory.' })));
+  }).catch(blad(box));
+};
+// A14
+ANALIZA.kompletnosc = (box) => {
+  serwerP('kompletnoscDanych', S.do).then((r) => {
+    box.replaceChildren(karta('Kompletność danych', `Ostatnie 7 dni do ${dataPL(r.do)}: liczba utworów w każdej godzinie wobec oczekiwanej (mediana tej samej godziny i dnia tygodnia z 4 poprzednich tygodni). 100% = tyle, ile zwykle. Niska wartość zwykle oznacza dziurę w źródle (np. playlista stacji nie była publikowana), nie zmianę programu.`,
+      tabela([['Stacja', stacjaKomorka, null, (x) => x.nazwa], ['Kompletność', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px' } }, el('span', { class: 'pasek', style: { width: '90px', display: 'inline-block' } }, el('i', { style: { width: (x.kompletnosc * 100).toFixed(1) + '%', background: x.kompletnosc < 0.8 ? 'var(--spadek)' : '' } })), proc(x.kompletnosc)), 'num', (x) => x.kompletnosc], ['Godzin z dziurą', (x) => fmt(x.dziurGodzin), 'num', (x) => x.dziurGodzin]],
+        r.stacje, { klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Kompletność danych ' + r.do, pusta: 'Za krótka historia: kompletność wymaga danych z co najmniej 3 z 4 poprzednich tygodni.' }),
+      r.bezHistorii && r.bezHistorii.length ? el('p', { class: 'sub', style: { marginTop: '8px' } }, 'Za krótka historia do porównania: ' + r.bezHistorii.join(', ') + '.') : null),
+    karta('Godziny z dziurą', 'Oczekiwane co najmniej 4 utwory, a było najwyżej 25% oczekiwanych.',
+      tabela([['Stacja', (x) => x.nazwa], ['Dzień', (x) => dataPL(x.dzien), 'num', (x) => x.dzien], ['Godzina', (x) => x.h + ':00', 'num', (x) => x.h], ['Było', (x) => fmt(x.faktycznie), 'num'], ['Zwykle', (x) => fmt(x.oczekiwane, 1), 'num']], r.dziury, { nazwaEksportu: 'Dziury w danych ' + r.do, pusta: 'Brak dziur w ostatnich 7 dniach.' })));
+  }).catch(blad(box));
+};
+
+// N4
+ANALIZA.wiek = (box) => {
+  const lista = (S.wybrane.length ? S.wybrane : ['_wszystkie']).slice(0, 6);   // bez wybranych stacji: całe radio łącznie
+  serwerP('wiekRepertuaru', lista, S.od.slice(0, 4), S.do.slice(0, 4)).then((r) => {
+    const mies = [...new Set(r.stacje.flatMap((s) => s.miesiace.map((m) => m.m)))].sort();
+    const w = el('div', { class: 'wykres' });
+    const dekady = el('div');
+    box.replaceChildren(karta('Średni rok wydania granych utworów', (S.wybrane.length ? '' : 'Wszystkie stacje łącznie; konkretne stacje (do 6) wybierzesz filtrem powyżej. ') + 'Ważony emisjami, tylko utwory ze znanym rokiem wydania.', w),
+      karta('Dekady', 'Udział emisji według dekady wydania w całym okresie.', dekady));
+    const zRokiem = r.stacje.some((s) => s.miesiace.some((m) => m.sredniRok != null));
+    if (!zRokiem) { infoMetadane(w, 'roku wydania utworów'); infoMetadane(dekady, 'roku wydania utworów'); return; }
+    linie(w, mies.map(miesPL), r.stacje.map((s) => { const mp = Object.fromEntries(s.miesiace.map((m) => [m.m, m.sredniRok])); return { nazwa: s.nazwa, jednostka: s.id, wartosci: mies.map((m) => mp[m] ?? null) }; }), { format: (v) => fmt(v) });
+    dekady.replaceChildren(...r.stacje.map((s) => {
+      const d = {}; let suma = 0;
+      s.miesiace.forEach((m) => Object.entries(m.dekady).forEach(([k, v]) => { d[k] = (d[k] || 0) + v; suma += v; }));
+      const kl = Object.keys(d).sort();
+      return el('div', { style: { margin: '8px 0' } }, el('div', { class: 'sub' }, s.nazwa),
+        el('div', { style: { display: 'flex', height: '18px', borderRadius: '6px', overflow: 'hidden' } }, kl.map((k, i) => el('span', { title: `${k}s: ${proc(d[k] / suma)}`, style: { width: (100 * d[k] / suma) + '%', background: `hsl(${210 + i * 22} 55% ${70 - i * 4}%)` } }))),
+        el('div', { class: 'sub', style: { fontSize: '12px' } }, kl.filter((k) => d[k] / suma >= 0.05).map((k) => `${k}s ${proc(d[k] / suma)}`).join(' · ')));
+    }));
+  }).catch(blad(box));
+};
+
+// N5
+ANALIZA.pory = (box) => serwerP('poryDnia', stacjaAnalizy(), S.od, S.do).then((r) => {
+  const a = el('div', { class: 'wykres' }), b = el('div', { class: 'wykres' }), c = el('div', { class: 'wykres' });
+  box.replaceChildren(karta('Emisje w ciągu doby', r.nazwa, a), karta('Charakter godzin', 'Udział polskich wykonawców, nowości (wydane w ostatnim roku) i klasyków (≥ 20 lat) – wśród utworów ze znanymi danymi.', b), karta('Średni rok wydania', null, c));
+  const et = r.godziny.map((g) => g.h + ':00');
+  slupki(a, r.godziny.map((g) => String(g.h)), r.godziny.map((g) => g.emisji), { opis: (e, v) => `${e}:00–${e}:59: <b>${fmt(v)}</b>` });
+  if (!r.godziny.some((g) => g.udzialPL != null || g.nowosci != null || g.sredniRok != null)) { infoMetadane(b, 'kraju wykonawcy i roku wydania'); infoMetadane(c, 'roku wydania utworów'); } else {
+  linie(b, et, [{ nazwa: 'Polscy', wartosci: r.godziny.map((g) => g.udzialPL) }, { nazwa: 'Nowości', wartosci: r.godziny.map((g) => g.nowosci) }, { nazwa: 'Klasyki', wartosci: r.godziny.map((g) => g.klasyki) }], { format: proc, procenty: true, minY: 0 });
+  linie(c, et, [{ nazwa: 'Średni rok', wartosci: r.godziny.map((g) => g.sredniRok) }], { format: (v) => fmt(v) }); }
+}).catch(blad(box));
+
+// N6
+ANALIZA.podobienstwo = (box) => serwerP('podobienstwoStacji', S.od, S.do).then((r) => {
+  const n = r.stacje.length;
+  if (n < 2) { box.replaceChildren(karta('Mapa podobieństwa', null, el('p', { class: 'opis' }, 'Za mało stacji z danymi w tym okresie.'))); return; }
+  const kom = 26, lewa = 150;
+  const siatka = el('div', { style: { display: 'grid', gridTemplateColumns: `${lewa}px repeat(${n}, ${kom}px)`, gap: '1px', fontSize: '11px', alignItems: 'center' } });
+  siatka.append(el('span'), ...r.stacje.map((s) => el('span', { title: s.nazwa, style: { writingMode: 'vertical-rl', transform: 'rotate(180deg)', height: '110px', overflow: 'hidden', whiteSpace: 'nowrap', color: 'var(--tekst2)' } }, s.nazwa)));
+  r.stacje.forEach((s, i) => {
+    siatka.append(el('button', { class: 'link', style: { textAlign: 'right', paddingRight: '6px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', fontSize: '12px' }, onclick: () => idz('stacja', s.id) }, s.nazwa));
+    r.macierz[i].forEach((v, j) => siatka.append(el('span', { title: `${s.nazwa} ↔ ${r.stacje[j].nazwa}: ${proc(v)}`, style: { width: kom + 'px', height: kom + 'px', borderRadius: '3px', background: i === j ? 'var(--siatka)' : 'var(--s1)', opacity: i === j ? 1 : (0.06 + 0.94 * v).toFixed(3) } })));
+  });
+  const pary = [];
+  r.stacje.forEach((a, i) => r.stacje.forEach((b, j) => { if (j > i) pary.push({ a: a.nazwa, b: b.nazwa, v: r.macierz[i][j] }); }));
+  pary.sort((x, y) => y.v - x.v);
+  box.replaceChildren(karta('Mapa podobieństwa stacji', 'Podobieństwo repertuaru (kosinus wektorów emisji, ostatnie do 13 miesięcy okresu). Ciemniej = bardziej podobne; stacje ułożone tak, by podobne były obok siebie.', (() => { siatka.addEventListener('click', (e) => { const k = e.target.closest('span[title]'); if (k) toast(k.title, 3000); }); return el('div', { class: 'przewin' }, siatka); })(), legendaSkali(0, 1, proc)),
+    el('div', { class: 'siatka2' }, karta('Najbardziej podobne pary', null, tabela([['Para', (x) => x.a + ' ↔ ' + x.b], ['Podobieństwo', (x) => proc(x.v), 'num', (x) => x.v]], pary, { limit: 15, nazwaEksportu: 'Podobieństwo stacji' })),
+      karta('Najbardziej różne pary', null, tabela([['Para', (x) => x.a + ' ↔ ' + x.b], ['Podobieństwo', (x) => proc(x.v), 'num']], pary.slice(-15).reverse()))));
+}).catch(blad(box));
+
+// N7
+ANALIZA.format = (box) => serwerP('zmianyFormatu', stacjaAnalizy(), S.od.slice(0, 7), S.do.slice(0, 7)).then((r) => {
+  const w = el('div', { class: 'wykres' }), zm = r.miesiace.filter((m) => m.zmiana);
+  box.replaceChildren(karta('Zmiany formatu – ' + r.nazwa, 'Podobieństwo repertuaru miesiąca do 3 poprzednich miesięcy. Czerwone punkty: spadek o ponad 2 odchylenia standardowe poniżej średniej – możliwa zmiana formatu albo luka w danych. Wybierz długi okres, np. „Wszystko”.', w,
+    zm.length ? el('p', { class: 'opis', style: { marginTop: '8px' } }, 'Możliwe zmiany: ' + zm.map((m) => miesPL(m.m) + ' (' + proc(m.podobienstwo) + ')').join(', ') + '.') : el('p', { class: 'sub', style: { marginTop: '8px' } }, 'Brak wyraźnych zmian w tym okresie.')));
+  if (r.miesiace.length < 3) { w.replaceChildren(el('p', { class: 'opis' }, 'Za mało miesięcy – wybierz dłuższy okres.')); return; }
+  linie(w, r.miesiace.map((m) => miesPL(m.m)), [{ nazwa: 'Podobieństwo', wartosci: r.miesiace.map((m) => m.podobienstwo), punkty: r.miesiace.map((m, i) => (m.zmiana ? i : -1)).filter((i) => i >= 0) }], { format: proc, procenty: true });
+}).catch(blad(box));
+
+// N8
+ANALIZA.pary = (box) => {
+  const od = roznicaDni(S.od, S.do) > 92 ? dodajDni(S.do, -92) : S.od;
+  serwerP('coPoCzym', stacjaAnalizy(), od, S.do).then((r) => box.replaceChildren(karta('Co leci po czym – ' + r.nazwa,
+    `Najczęstsze pary „utwór → następny utwór” (odstęp ≤ 15 min), ${dataPL(od)} – ${dataPL(S.do)}${od !== S.od ? ' (do 3 miesięcy wstecz od końca okresu)' : ''}, ${fmt(r.emisji)} emisji. Częste pary to zwykle ręczne bloki albo stałe przejścia w playliście stacji.`,
+    tabela([['Najpierw', (x) => el('button', { class: 'link', onclick: (e) => { e.stopPropagation(); idz('utwor', x.z); } }, x.zNazwa), null, (x) => x.zNazwa], ['', () => '→'], ['Potem', (x) => el('button', { class: 'link', onclick: (e) => { e.stopPropagation(); idz('utwor', x.na); } }, x.naNazwa), null, (x) => x.naNazwa], ['Razy', (x) => fmt(x.razy), 'num', (x) => x.razy]],
+      r.pary, { nazwaEksportu: 'Co po czym ' + r.nazwa, pusta: 'Żadna para nie powtórzyła się co najmniej 2 razy.' })))).catch(blad(box));
+};
+
+// N9
+ANALIZA.skoki = (box) => {
+  const od = roznicaDni(S.od, S.do) > 185 ? dodajDni(S.do, -185) : S.od;
+  serwerP('skokiWykonawcow', od, S.do).then((r) => box.replaceChildren(karta('Skoki wykonawców',
+    `Dni, w których wykonawca był grany w całym radiu wyraźnie częściej niż zwykle (≥ 15 emisji, ponad 3× średnia i ponad 4 odchylenia standardowe z 28 poprzednich dni), ${dataPL(od)} – ${dataPL(S.do)}. Zwykle: premiera, koncert, nagroda, śmierć artysty, dzień tematyczny.`,
+    tabela([['Wykonawca', (x) => el('b', {}, x.wykonawca), null, (x) => x.wykonawca], ['Dzień', (x) => dataPL(x.dzien) + ', ' + DNI[(new Date(x.dzien + 'T12:00:00Z').getUTCDay() + 6) % 7], 'num', (x) => x.dzien], ['Emisji', (x) => fmt(x.emisji), 'num'], ['Zwykle', (x) => fmt(x.zwykle, 1), 'num']],
+      r.skoki, { klik: (x) => idz('szukaj', x.wykonawca), nazwaEksportu: 'Skoki wykonawców', pusta: 'Brak wyraźnych skoków w tym okresie.' })))).catch(blad(box));
+};
+
+// ---------------- RAMÓWKI (EPG) ----------------
+const EPG = { data: null, grupa: '', szukaj: '', sort: 'grupa', widok: 'siatka', ulubione: false };
+// M10: na telefonie domyślnie lista „Teraz i następnie” (siatka godzin mieści tam ok. godzinę programu); wybór zapamiętany
+if (window.matchMedia('(max-width: 760px)').matches) EPG.widok = 'lista';
+try { Object.assign(EPG, JSON.parse(localStorage.getItem('mb-epg') || '{}'), { data: null, szukaj: '' }); } catch (e) { /* bez pamięci */ }
+const zapamietajEpg = () => { try { localStorage.setItem('mb-epg', JSON.stringify({ grupa: EPG.grupa, sort: EPG.sort, widok: EPG.widok, ulubione: EPG.ulubione })); } catch (e) { /* bez pamięci */ } };
+const PX_NA_MIN = 4;
+WIDOKI.epg = (box, stacja) => {
+  EPG.data = EPG.data || dzisISO();
+  const data = el('input', { type: 'date', value: EPG.data, 'aria-label': 'Dzień' });
+  data.addEventListener('change', () => { EPG.data = data.value; idz('epg', stacja, true); });
+  const dzien = (n) => el('button', { class: 'chip' + (EPG.data === dodajDni(dzisISO(), n) ? ' akt' : ''), onclick: () => { EPG.data = dodajDni(dzisISO(), n); idz('epg', stacja, true); } }, n === 0 ? 'Dziś' : n === 1 ? 'Jutro' : n === -1 ? 'Wczoraj' : dataPL(dodajDni(dzisISO(), n), false));
+  const siatka = el('div', {}, szkielet(1)), sterowanie = el('div', { style: { display: 'grid', gap: '10px' } });
+  box.replaceChildren(el('h1', {}, 'Ramówki'),
+    el('p', { class: 'opis' }, 'Program jak w telewizyjnym EPG – ramówki stacji, które publikują je na swoich stronach. Eurozet, Time/Eska, MC Radio, Afera i LUZ podają plan tygodnia (bez wyjątków na konkretny dzień); Radio Szczecin i Radio Białystok – tylko bieżący dzień; Radio Meteor – z ramówki Meteor Analytics (2 tygodnie naprzód, z wyjątkami).'),
+    el('div', { class: 'filtry' }, [-1, 0, 1, 2, 3].map(dzien), data), sterowanie, siatka);
+  serwerP('ramowka', EPG.data, stacja ? [stacja] : []).then((r) => {
+    const wszystkie = Object.keys(r.stacje);
+    if (!wszystkie.length) { siatka.replaceChildren(karta(null, null, el('p', { class: 'opis' }, 'Brak ramówki tej stacji na ten dzień.'), el('button', { class: 'przycisk drugi', onclick: () => idz('epg') }, 'Wszystkie ramówki'))); return; }
+    const grupy = r.grupy || {}, grupa = (s) => grupy[s] || 'Pozostałe';
+    const kolejnoscGrup = [...new Set(Object.values(grupy)), 'Pozostałe'];
+    const ulub = S.moje.ulubioneStacje || [];
+    const ile = {}; wszystkie.forEach((s) => { ile[grupa(s)] = (ile[grupa(s)] || 0) + 1; });
+    const szukaj = el('input', { type: 'search', placeholder: 'Szukaj stacji', value: EPG.szukaj, style: { width: '180px' }, 'aria-label': 'Szukaj stacji' });
+    szukaj.addEventListener('input', () => { EPG.szukaj = szukaj.value; rysuj(); });
+    const sort = el('select', { 'aria-label': 'Sortowanie' }, [['grupa', 'Wg grupy'], ['nazwa', 'Alfabetycznie'], ['ulubione', 'Ulubione najpierw']].map(([v, n]) => el('option', { value: v }, n)));
+    sort.value = EPG.sort; sort.addEventListener('change', () => { EPG.sort = sort.value; zapamietajEpg(); rysuj(); });
+    const chipy = () => el('div', { class: 'filtry' },
+      [['', 'Wszystkie (' + wszystkie.length + ')']].concat(kolejnoscGrup.filter((g) => ile[g]).map((g) => [g, g + ' (' + ile[g] + ')']))
+        .map(([g, n]) => el('button', { class: 'chip' + (EPG.grupa === g ? ' akt' : ''), onclick: () => { EPG.grupa = g; zapamietajEpg(); rysujSterowanie(); rysuj(); } }, n)),
+      el('button', { class: 'chip' + (EPG.ulubione ? ' akt' : ''), onclick: () => { EPG.ulubione = !EPG.ulubione; zapamietajEpg(); rysujSterowanie(); rysuj(); } }, '★ Ulubione'));
+    const rysujSterowanie = () => sterowanie.replaceChildren(chipy(), el('div', { class: 'filtry' }, szukaj, sort,
+      ['siatka', 'lista'].map((v) => el('button', { class: 'chip' + (EPG.widok === v ? ' akt' : ''), onclick: () => { EPG.widok = v; zapamietajEpg(); rysujSterowanie(); rysuj(); } }, v === 'siatka' ? 'Siatka godzin' : 'Teraz i następnie'))));
+    rysujSterowanie();
+    const poczDnia = Date.parse(EPG.data + 'T00:00:00'), teraz = (Date.now() - poczDnia) / 6e4;
+    const min = (t) => (Date.parse(String(t).replace(' ', 'T')) - poczDnia) / 6e4;
+    const krotka = (s) => nazwa(s).replace(' (Polskie Radio)', '');
+    const wybrane = () => {
+      const q = EPG.szukaj.trim().toLowerCase();
+      const l = wszystkie.filter((s) => (!EPG.grupa || grupa(s) === EPG.grupa) && (!EPG.ulubione || ulub.includes(s)) && (!q || nazwa(s).toLowerCase().includes(q)));
+      const az = (a, b) => porownajStacje(a, b);
+      if (EPG.sort === 'nazwa') l.sort(az);
+      else if (EPG.sort === 'ulubione') l.sort((a, b) => ((ulub.includes(a) ? ulub.indexOf(a) : 1e3) - (ulub.includes(b) ? ulub.indexOf(b) : 1e3)) || az(a, b));
+      else l.sort((a, b) => (kolejnoscGrup.indexOf(grupa(a)) - kolejnoscGrup.indexOf(grupa(b))) || az(a, b));
+      return l;
+    };
+    const glowkaStacji = (s) => el('div', { class: 'epg-st' }, logo(s, 'm'),
+      el('button', { class: 'link', style: { textAlign: 'left' }, onclick: () => (S.jedn[s] ? idz('stacja', s) : toast('Tej stacji nie ma jeszcze w pobranych danych.')) }, krotka(s)),
+      Odtwarzacz.maStrumien(s) ? el('button', { class: 'ikona-btn', title: 'Słuchaj', 'aria-label': 'Słuchaj ' + nazwa(s), html: svgIkona(IK.graj), onclick: () => Odtwarzacz.graj(s) }) : null);
+    const rysuj = () => {
+      const lista = wybrane();
+      if (!lista.length) { siatka.replaceChildren(karta(null, null, el('p', { class: 'opis' }, 'Żadna stacja nie pasuje do filtrów.'))); return; }
+      if (EPG.widok === 'lista') { siatka.replaceChildren(listaTeraz(lista)); return; }
+      const szer = 24 * 60 * PX_NA_MIN;
+      const czas = el('div', { class: 'epg-czas' }, el('div', { style: { width: '150px', position: 'sticky', left: 0, background: 'var(--karta)', zIndex: 2, borderLeft: 0 } }),
+        Array.from({ length: 48 }, (_, i) => el('div', { style: { width: 30 * PX_NA_MIN + 'px' } }, i % 2 ? '' : String(i / 2).padStart(2, '0') + ':00')));
+      const wiersze = [];
+      let ostGrupa = null;
+      lista.forEach((s) => {
+        if (EPG.sort === 'grupa' && grupa(s) !== ostGrupa) { ostGrupa = grupa(s); wiersze.push(el('div', { class: 'epg-grupa' }, el('span', {}, ostGrupa))); }
+        const pas = el('div', { class: 'epg-pas', style: { width: szer + 'px' } });
+        const dane = r.stacje[s];
+        if (!Array.isArray(dane)) pas.append(el('span', { class: 'sub', style: { position: 'absolute', left: '10px', top: '22px' } }, 'Ramówka niedostępna (' + (dane && dane.blad) + ')'));
+        else if (!dane.length) pas.append(el('span', { class: 'sub', style: { position: 'absolute', left: '10px', top: '22px' } }, 'Brak audycji w ramówce tego dnia.'));
+        else {
+          // Jeden wiersz na stację: w każdej chwili pokazujemy najbardziej szczegółową audycję (najkrótszą pozycję
+          // dłuższą niż 30 min, która obejmuje tę chwilę; pasmo-parasol widać tam, gdzie nie ma nic węższego).
+          // Krótkie pozycje (serwis, pogoda…) wewnątrz innej audycji = znaczniki w bloku + lista „W trakcie”.
+          const poz = dane.map((a) => ({ a, o: Math.max(0, min(a.od)), d: Math.min(24 * 60, min(a.do)) })).filter((x) => x.d > 0 && x.o < 24 * 60 && x.d > x.o);
+          const zawarta = (x) => poz.some((g) => g !== x && g.o <= x.o && x.d <= g.d && (g.d - g.o) > (x.d - x.o));
+          const znaczniki = poz.filter((x) => x.d - x.o <= 30 && zawarta(x));
+          const kandydaci = poz.filter((x) => !znaczniki.includes(x));
+          const granice = [...new Set(kandydaci.flatMap((x) => [x.o, x.d]))].sort((p1, p2) => p1 - p2);
+          const segmenty = [];
+          for (let k = 0; k + 1 < granice.length; k++) {
+            const o = granice[k], d = granice[k + 1];
+            const pokrywa = kandydaci.filter((x) => x.o <= o && x.d >= d).sort((x, y) => (x.d - x.o) - (y.d - y.o))[0];
+            if (!pokrywa) continue;
+            const ost = segmenty[segmenty.length - 1];
+            if (ost && ost.x === pokrywa && ost.d === o) ost.d = d; else segmenty.push({ x: pokrywa, o, d });
+          }
+          segmenty.forEach((sg) => {
+            const a = sg.x.a, o = sg.o, d = sg.d;
+            const wstawki = znaczniki.filter((w) => w.o >= o && w.o < d).sort((w1, w2) => w1.o - w2.o);
+            const trwa = o <= teraz && teraz < d, szer = (d - o) * PX_NA_MIN - 2, krotka = sg.x.d - sg.x.o <= 12;
+            const czas = String(a.od).slice(11, 16) + '–' + String(a.do).slice(11, 16);
+            const blok = el('button', { class: 'epg-aud' + (trwa ? ' teraz' : '') + (krotka ? ' krotka' : ''),
+              style: Object.assign({ left: o * PX_NA_MIN + 1 + 'px', width: Math.max(4, szer) + 'px' }, kolorStacji(s) ? { '--kst': kolorStacji(s) } : {}),
+              title: a.tytul + ' · ' + czas + (a.prowadzacy ? ' · ' + a.prowadzacy : '') + (wstawki.length ? '\nW trakcie: ' + wstawki.map((w) => String(w.a.od).slice(11, 16) + ' ' + w.a.tytul).join(', ') : ''),
+              onclick: () => szczegolyAudycji(s, a, trwa, wstawki.map((w) => w.a)) },
+            krotka || szer < 34 ? null : el('b', {}, a.tytul), krotka || szer < 60 ? null : el('span', {}, czas + (a.prowadzacy ? ' · ' + a.prowadzacy : '')));
+            wstawki.forEach((w) => blok.append(el('i', { class: 'epg-wst', style: { left: (w.o - o) * PX_NA_MIN - 1 + 'px' } })));
+            pas.append(blok);
+          });
+        }
+        wiersze.push(el('div', { class: 'epg-wiersz' }, glowkaStacji(s), pas));
+      });
+      const w = el('div', { class: 'epg-w', style: { width: szer + 150 + 'px' } }, czas, ...wiersze);
+      if (teraz >= 0 && teraz < 24 * 60) w.append(el('div', { class: 'epg-kreska', style: { left: 150 + teraz * PX_NA_MIN + 'px' } }));
+      const przew = el('div', { class: 'epg' }, w);
+      siatka.replaceChildren(przew, el('p', { class: 'sub', style: { marginTop: '6px' } }, `${lista.length} z ${wszystkie.length} stacji. Źródła: strony stacji. Przewiń w poziomie; kliknij audycję, by zobaczyć opis.`));
+      requestAnimationFrame(() => { przew.scrollLeft = Math.max(0, (teraz >= 0 && teraz < 1440 ? teraz : 6 * 60) * PX_NA_MIN - 120); });
+    };
+    // widok „Teraz i następnie” (dla dnia innego niż dziś: pierwsze audycje dnia)
+    const listaTeraz = (lista) => el('div', { class: 'teraz-kafle' }, lista.map((s) => {
+      const dane = Array.isArray(r.stacje[s]) ? r.stacje[s] : [];
+      const chwila = teraz >= 0 && teraz < 1440 ? teraz : 0;
+      const glowne = dane.filter((a) => min(a.do) - min(a.od) >= 20);   // bez krótkich wstawek
+      const teraz1 = glowne.filter((a) => min(a.od) <= chwila && chwila < min(a.do)).pop();
+      const potem = glowne.filter((a) => min(a.od) > chwila).slice(0, 2);
+      const poz = (a, etyk) => el('button', { class: 'utw-teraz', onclick: () => szczegolyAudycji(s, a, a === teraz1) },
+        el('span', { class: 'sub' }, etyk + ' ' + String(a.od).slice(11, 16) + '–' + String(a.do).slice(11, 16)), el('b', {}, a.tytul), a.prowadzacy ? el('span', {}, a.prowadzacy) : null);
+      return el('div', { class: 'teraz-kafel' },
+        el('div', { class: 'g' }, el('button', { class: 'st', onclick: () => S.jedn[s] && idz('stacja', s) }, logo(s), el('span', {}, krotka(s))),
+          Odtwarzacz.maStrumien(s) ? el('button', { class: 'ikona-btn', title: 'Słuchaj', 'aria-label': 'Słuchaj ' + nazwa(s), html: svgIkona(IK.graj), onclick: () => Odtwarzacz.graj(s) }) : null),
+        el('span', { class: 'znacznik', style: { alignSelf: 'flex-start', marginLeft: 0 } }, grupa(s)),
+        !Array.isArray(r.stacje[s]) ? el('p', { class: 'sub' }, 'Ramówka niedostępna') :
+          [teraz1 ? poz(teraz1, 'Teraz') : el('p', { class: 'sub' }, teraz >= 0 && teraz < 1440 ? 'Teraz: brak audycji w ramówce' : ''), ...potem.map((a) => poz(a, 'Potem'))]);
+    }));
+    rysuj();
+  }).catch((e) => bladW(siatka, e));
+};
+function linkKalendarza(s, a) {
+  const f = (x) => String(x).replace(/[-:]/g, '').slice(0, 13) + '00';
+  return 'https:\/\/calendar.google.com/calendar/render?' + new URLSearchParams({ action: 'TEMPLATE', text: a.tytul + ' – ' + nazwa(s), dates: f(a.od) + '/' + f(a.do), ctz: 'Europe/Warsaw',
+    details: [a.prowadzacy ? 'Prowadzi: ' + a.prowadzacy : '', 'Z ramówki Music Base'].filter(Boolean).join('\n') }).toString();
+}
+function szczegolyAudycji(s, a, trwa, wstawki) {
+  otworzArkusz(el('div', { style: { display: 'grid', gap: '10px' } },
+    el('div', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(s), el('div', {}, el('div', { class: 'sub' }, nazwa(s) + ' · ' + dataPL(a.od) + ', ' + String(a.od).slice(11, 16) + '–' + String(a.do).slice(11, 16)), el('h2', {}, a.tytul))),
+    a.foto ? el('img', { src: a.foto, alt: '', style: { width: '100%', maxHeight: '240px', objectFit: 'cover', borderRadius: '12px' } }) : null,
+    a.prowadzacy ? el('p', {}, el('b', {}, 'Prowadzi: '), a.prowadzacy) : null,
+    a.kategoria ? el('span', { class: 'znacznik' }, a.kategoria) : null,
+    a.opis ? el('p', { class: 'opis', html: String(a.opis).replace(/<(?!\/?(b|i|em|strong|br|p)\b)[^>]*>/gi, '') }) : null,
+    wstawki && wstawki.length ? el('div', {}, el('h3', {}, 'W trakcie audycji'), el('div', { style: { display: 'grid', gap: '2px' } }, wstawki.map((w) => el('div', { class: 'sub', style: { fontSize: '14px' } }, String(w.od).slice(11, 16) + '–' + String(w.do).slice(11, 16) + ' · ' + w.tytul)))) : null,
+    el('div', { class: 'wiersz' },
+      trwa && Odtwarzacz.maStrumien(s) ? el('button', { class: 'przycisk', html: svgIkona(IK.graj) + 'Słuchaj teraz', onclick: () => { zamknijArkusz(); Odtwarzacz.graj(s); } }) : null,
+      a.link ? el('a', { class: 'przycisk drugi', href: a.link, target: '_blank', rel: 'noopener' }, 'Strona audycji') : null,
+      // E1: Kalendarz Google (zwykły link z tytułem, stacją i godziną – czas polski)
+      el('a', { class: 'przycisk drugi', target: '_blank', rel: 'noopener', href: linkKalendarza(s, a) }, 'Do kalendarza'),
+      // E2: e-mail ok. godzinę przed każdą emisją tej audycji
+      (() => {
+        const jest = () => (S.moje.przypomnienia || []).some((p) => p.s === s && p.t.toLowerCase() === String(a.tytul).toLowerCase());
+        const b = el('button', { class: 'przycisk drugi', onclick: () => serwer('zapiszMoje', { przypomnienie: [s, a.tytul, !jest()] }).then((m) => { S.moje = m; b.textContent = jest() ? 'Nie przypominaj' : 'Przypominaj e-mailem'; toast(jest() ? 'Przypomnę e-mailem ok. godzinę przed każdą emisją' : 'Przypomnienie usunięte'); }).catch((e) => toast(e.message)) },
+          jest() ? 'Nie przypominaj' : 'Przypominaj e-mailem');
+        return b;
+      })())));
+}
+
+// ---------------- PLAYLISTY ----------------
+WIDOKI.playlisty = (box) => {
+  box.replaceChildren(el('h1', {}, 'Playlisty'), ...szkielet(2));
+  Promise.all([serwer('spotifyStan'), serwer('autoPlaylisty')]).then(([sp, ap]) => {
+    S.start.spotify = sp;
+    const odswiez = () => idz('playlisty', null, true);
+    const spBox = karta('Spotify', null);
+    if (!sp.skonfigurowany) {
+      const id = el('input', { type: 'text', placeholder: 'Client ID', style: { flex: 1, minWidth: 0 }, autocomplete: 'off' }), sec = el('input', { type: 'password', placeholder: 'Client Secret', style: { flex: 1, minWidth: 0 }, autocomplete: 'off' });
+      spBox.append(el('p', { class: 'opis' }, 'Jednorazowo: utwórz aplikację na developer.spotify.com (Dashboard → Create app, API: Web API) i jako Redirect URI wpisz dokładnie ten adres:'),
+        el('div', { class: 'wiersz', style: { margin: '8px 0' } }, el('code', { style: { overflowWrap: 'anywhere', fontSize: '13px' } }, sp.redirect), el('button', { class: 'przycisk drugi maly', onclick: () => navigator.clipboard && navigator.clipboard.writeText(sp.redirect).then(() => toast('Skopiowano')) }, 'Kopiuj')),
+        el('p', { class: 'opis' }, 'Potem wklej Client ID i Client Secret z ustawień aplikacji (trafią tylko do ustawień tego skryptu na Twoim koncie, nie do czatu ani repozytorium).'),
+        el('div', { class: 'wiersz', style: { marginTop: '8px' } }, id, sec, el('button', { class: 'przycisk', onclick: () => serwer('spotifyKonfiguruj', id.value, sec.value).then(odswiez).catch((e) => toast(e.message, 5000)) }, 'Zapisz')));
+    } else if (!sp.polaczony) {
+      spBox.append(el('p', { class: 'opis' }, 'Aplikacja skonfigurowana. Połącz konto – otworzy się nowa karta z logowaniem Spotify; po zatwierdzeniu wróć tutaj i kliknij „Odśwież”.'),
+        el('div', { class: 'wiersz', style: { marginTop: '8px' } }, el('button', { class: 'przycisk', onclick: () => serwer('spotifyAdres').then((w) => window.open(w.url, '_blank')).catch((e) => toast(e.message)) }, 'Połącz ze Spotify'),
+          el('button', { class: 'przycisk drugi', onclick: odswiez }, 'Odśwież')));
+    } else {
+      spBox.append(el('p', { class: 'opis' }, 'Połączono. Dowolny ranking zapiszesz przyciskiem „Zapisz w Spotify” w zakładce Ranking.'),
+        el('button', { class: 'przycisk drugi', style: { marginTop: '8px' }, onclick: () => serwer('spotifyRozlacz').then(odswiez) }, 'Rozłącz'));
+    }
+    let lista = ap.lista;
+    const tab = el('div');
+    const zapisz = () => serwer('zapiszAutoPlaylisty', lista).then((w) => { lista = w.lista; rysuj(); }).catch((e) => toast(e.message));
+    const rysuj = () => tab.replaceChildren(tabela([
+      ['Playlista', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, x.jednostka ? logo(x.jednostka, 'm') : null, (x.jednostka ? nazwa(x.jednostka) : 'Wszystkie stacje') + ` – top ${x.n} z ${x.dni} dni`)],
+      ['Stan', (x) => (x.blad ? el('span', { class: 'blad' }, x.blad) : x.url ? el('span', {}, el('a', { href: x.url, target: '_blank', rel: 'noopener' }, 'otwórz'),
+        ' · ' + (x.odswiezona ? 'odświeżona ' + dataPL(x.odswiezona) : 'w kolejce') + (x.brakow ? ' · ' + x.brakow + ' utw. nie ma w Spotify' : ''),
+        x.publiczna === true ? el('span', { class: 'blad' }, ' · Spotify pokazuje ją jako publiczną') : x.publiczna === false ? el('span', { class: 'sub' }, ' · prywatna') : null)
+        : el('span', { class: 'sub' }, 'w kolejce – powstanie przy najbliższym odświeżeniu (ok. 6:00, potem co minutę, aż wszystkie)'))],
+      ['', (x, i) => el('button', { class: 'przycisk drugi maly', onclick: () => { lista.splice(i, 1); zapisz(); } }, 'Usuń'), 'num']], lista, { pusta: 'Brak automatycznych playlist.' }));
+    const jed = el('select', { 'aria-label': 'Stacja' }, el('option', { value: '' }, 'Wszystkie stacje'), S.start.jednostki.map((j) => el('option', { value: j.id }, j.nazwa)));
+    const n = el('input', { type: 'number', value: 50, min: 5, max: 100, style: { width: '72px' }, 'aria-label': 'Liczba utworów' });
+    const dni = el('input', { type: 'number', value: 30, min: 1, max: 365, style: { width: '72px' }, 'aria-label': 'Liczba dni' });
+    const wszystkie = el('button', { class: 'przycisk drugi', onclick: () => {
+      const jest = new Set(lista.map((x) => x.jednostka));
+      S.start.jednostki.forEach((j) => { if (!jest.has(j.id)) lista.push({ jednostka: j.id, n: +n.value, dni: +dni.value }); });
+      zapisz();
+    } }, 'Dodaj dla każdej stacji');
+    rysuj();
+    const prywatne = el('button', { class: 'przycisk drugi', onclick: (e) => {
+      e.currentTarget.disabled = true;
+      serwer('spotifyPrywatne').then((w) => { lista = w.lista; rysuj(); toast(w.publicznych ? `Spotify nadal pokazuje ${w.publicznych} jako publiczne – zmień je w aplikacji Spotify („Usuń z profilu” / „Ustaw jako prywatną”)` : 'Wszystkie playlisty są prywatne', 6000); })
+        .catch((er) => toast(er.message)).finally(() => { prywatne.disabled = false; });
+    } }, 'Ustaw wszystkie jako prywatne');
+    box.replaceChildren(el('h1', {}, 'Playlisty'), spBox, kartaAppleListy(),
+      karta('Automatyczne playlisty „Top N”', 'Odświeżane codziennie ok. 6:00 (wymaga połączonego Spotify i jednorazowego uruchomienia funkcji zainstalujPanel – patrz instrukcja). Każda to najczęściej grane utwory stacji z ostatnich dni; ta sama playlista w Spotify jest nadpisywana.',
+        el('div', { class: 'wiersz' }, jed, 'top', n, 'z', dni, 'dni', el('button', { class: 'przycisk', onclick: () => { lista.push({ jednostka: jed.value, n: +n.value, dni: +dni.value }); zapisz(); } }, 'Dodaj'), wszystkie),
+        el('div', { style: { marginTop: '10px' } }, tab),
+        el('div', { class: 'wiersz', style: { marginTop: '8px' } }, prywatne, el('span', { class: 'sub' }, 'Nowe playlisty tworzymy jako prywatne (niewidoczne na profilu i w wyszukiwarce; kto ma link, ten je otworzy – Spotify nie pozwala inaczej).'))),
+      karta('Apple Music', 'Bezpośredni zapis wymaga płatnego konta Apple Developer. W zakładce Ranking przycisk „Apple Music (CSV)” tworzy plik na Twoim Dysku – zaimportuj go w serwisie do przenoszenia playlist albo przenieś playlistę ze Spotify.'));
+  }).catch((e) => bladW(box, e));
+};
+
+// ---------------- ALERTY I USTAWIENIA ----------------
+/** E2: lista przypomnień o audycjach z usuwaniem. */
+function kartaPrzypomnien() {
+  const box = el('div');
+  const rysuj = () => box.replaceChildren(tabela([['Audycja', (p) => p.t], ['Stacja', (p) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(p.s, 'm'), nazwa(p.s))],
+    ['', (p) => el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); serwer('zapiszMoje', { przypomnienie: [p.s, p.t, false] }).then((m) => { S.moje = m; rysuj(); }).catch((er) => toast(er.message)); } }, 'Usuń'), 'num']],
+    S.moje.przypomnienia || [], { pusta: 'Brak. Przypomnienie ustawisz w szczegółach audycji (Ramówki albo Ramówka w profilu stacji).' }));
+  rysuj();
+  return karta('Przypomnienia o audycjach', 'E-mail ok. godzinę przed każdą emisją wybranej audycji (sprawdzane co godzinę z ramówką; wymaga uruchomienia zainstalujPanel).', box);
+}
+/** O1: powiadomienia na telefon przez ntfy (alerty, alerty dzienne, przypomnienia, strażnik zadań). */
+function kartaNtfy() {
+  const box = el('div', {}, el('p', { class: 'stan' }, 'Sprawdzam…'));
+  const rysuj = (r) => {
+    const akcja = (a) => serwer('ntfyUstawienia', a).then((w) => { rysuj(w); if (a === 'test') toast(w.test ? 'Wysłano – sprawdź telefon' : 'Nie udało się wysłać'); }).catch((e) => toast(e.message));
+    box.replaceChildren(r.temat
+      ? el('div', {}, el('p', { class: 'opis' }, 'Włączone. W aplikacji ntfy na telefonie: + (subskrybuj temat) → wpisz dokładnie:'),
+        el('p', {}, el('code', { style: { fontSize: '15px' } }, r.temat), ' ', el('button', { class: 'przycisk drugi maly', onclick: () => navigator.clipboard && navigator.clipboard.writeText(r.temat).then(() => toast('Skopiowano temat')) }, 'Kopiuj')),
+        el('p', { class: 'sub' }, 'Temat działa jak hasło – nie pokazuj go innym. Serwer: ntfy.sh (domyślny w aplikacji).'),
+        el('div', { class: 'wiersz', style: { marginTop: '8px' } }, el('button', { class: 'przycisk', onclick: () => akcja('test') }, 'Wyślij test'),
+          el('button', { class: 'przycisk drugi', onclick: () => akcja('wlacz') }, 'Nowy temat'), el('button', { class: 'przycisk drugi', onclick: () => akcja('wylacz') }, 'Wyłącz')))
+      : el('div', {}, el('p', { class: 'opis' }, 'Wyłączone. Zainstaluj na telefonie aplikację ntfy (Google Play albo F-Droid), potem włącz tutaj – dostaniesz temat do subskrypcji.'),
+        el('button', { class: 'przycisk', style: { marginTop: '8px' }, onclick: () => akcja('wlacz') }, 'Włącz powiadomienia')));
+  };
+  serwer('ntfyUstawienia', 'stan').then(rysuj).catch((e) => box.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  return karta('Powiadomienia na telefon (ntfy)', 'Alerty o emisjach, alerty dzienne, przypomnienia o audycjach i strażnik zadań GitHuba także jako powiadomienie na Androidzie. E-mail zostaje jako zapas.', box);
+}
+/** Wygląd (W3) i dolny pasek na telefonie (M6) – zapisywane w tej przeglądarce. */
+function kartaUstawien() {
+  const motyw = el('select', { 'aria-label': 'Motyw' }, [['systemowy', 'jak w systemie'], ['jasny', 'jasny'], ['ciemny', 'ciemny']].map(([v, n]) => el('option', { value: v }, n)));
+  motyw.value = motywZapisany();
+  motyw.addEventListener('change', () => ustawMotyw(motyw.value, true));
+  const wybrane = pozycjeDolu().slice();
+  const pola = wybrane.map((w, i) => {
+    const s = el('select', { 'aria-label': 'Pozycja ' + (i + 1) }, MENU.map(([id, n]) => el('option', { value: id }, n)));
+    s.value = w;
+    s.addEventListener('change', () => { wybrane[i] = s.value; ustawDol(wybrane); toast('Dolny pasek zmieniony'); });
+    return s;
+  });
+  return karta('Wygląd i dolny pasek', 'Zapisywane w tej przeglądarce.',
+    el('div', { class: 'wiersz', style: { margin: '6px 0 12px' } }, el('span', { class: 'sub' }, 'Motyw:'), motyw),
+    el('p', { class: 'sub' }, 'Dolny pasek na telefonie (4 pozycje, piąta to „Więcej”):'),
+    el('div', { class: 'wiersz', style: { marginTop: '6px' } }, pola, el('button', { class: 'przycisk drugi maly', onclick: () => { ustawDol(null); idz('alerty', null, true); } }, 'Domyślny')));
+}
+/** Czasy zapytań zmierzone na tym urządzeniu (F9) – do porównania przed i po zmianach. */
+function kartaPomiarow() {
+  const box = el('div');
+  const rysuj = () => {
+    const t = Pomiar.tabela();
+    box.replaceChildren(tabela([['Urządzenie', (x) => x.urz, 'sub'], ['Zapytanie', (x) => x.fn], ['Mediana', (x) => fmt(x.med / 1000, 1) + ' s', 'num', (x) => x.med],
+      ['90% szybciej niż', (x) => fmt(x.p90 / 1000, 1) + ' s', 'num tylko-szeroki', (x) => x.p90], ['Najdłużej', (x) => fmt(x.max / 1000, 1) + ' s', 'num', (x) => x.max],
+      ['Wywołań', (x) => fmt(x.n), 'num tylko-szeroki'], ['Błędy', (x) => (x.bledy ? el('span', { title: x.blad || '' }, fmt(x.bledy)) : '0'), 'num tylko-szeroki', (x) => x.bledy],
+      ['Ostatni błąd', (x) => el('span', { class: 'sub' }, x.blad || ''), 'tylko-szeroki', (x) => x.blad || '']], t,
+    { limit: 15, pusta: 'Jeszcze brak pomiarów – pojawią się po korzystaniu z panelu.', nazwaEksportu: 'Pomiary czasu panelu' }));
+  };
+  rysuj();
+  return karta('Szybkość panelu na tym urządzeniu', 'Czas każdego zapytania do serwera (ostatnie 60 na funkcję) i otwarcia panelu. Skopiuj i wyślij, gdy coś działa wolno.', box,
+    el('div', { class: 'wiersz', style: { marginTop: '8px' } },
+      el('button', { class: 'przycisk drugi maly', onclick: () => {
+        const tekst = Pomiar.tabela().map((x) => `${x.urz}\t${x.fn}\tmediana ${x.med} ms\tp90 ${x.p90} ms\tmaks ${x.max} ms\tn=${x.n}\tbłędy ${x.bledy}` + (x.blad ? `\tostatni błąd: ${x.blad}` : '')).join('\n');
+        (navigator.clipboard ? navigator.clipboard.writeText(tekst) : Promise.reject()).then(() => toast('Skopiowano pomiary'), () => toast('Nie udało się skopiować'));
+      } }, 'Kopiuj pomiary'),
+      el('button', { class: 'przycisk drugi maly', onclick: () => { Pomiar.wyczysc(); rysuj(); } }, 'Wyczyść')));
+}
+
+const TYPY_ALERTOW = { utwor: 'utwór', wykonawca: 'wykonawca', top10: 'top 10', debiut3: 'debiut', powrot: 'powrót' };
+WIDOKI.alerty = (box) => {
+  box.replaceChildren(el('h1', {}, 'Alerty i ustawienia'), ...szkielet(2));
+  serwer('alerty').then((r) => {
+    let lista = r.alerty;
+    const tab = el('div');
+    const zapisz = () => serwer('zapiszAlerty', lista).then((w) => { lista = w.alerty; rysuj(); }).catch((e) => toast(e.message));
+    const rysuj = () => tab.replaceChildren(tabela([
+      ['Co', (a) => el('span', {}, el('span', { class: 'znacznik' }, TYPY_ALERTOW[a.typ] || a.typ), ' ', a.typ === 'utwor' ? el('button', { class: 'link', onclick: () => idz('utwor', a.klucz) }, a.opis) : a.opis)],
+      ['Stacje', (a) => (a.stacje.length ? a.stacje.map(nazwa).join(', ') : 'wszystkie'), 'sub'],
+      ['', (a, i) => el('button', { class: 'przycisk drugi maly', onclick: () => { lista.splice(i, 1); zapisz(); } }, 'Usuń'), 'num']], lista, { pusta: 'Nie masz jeszcze alertów.' }));
+    const pole = el('input', { type: 'text', placeholder: 'Wykonawca, np. Dawid Podsiadło', style: { flex: 1, minWidth: 0 } });
+    let stacje = [];
+    const stBtn = el('button', { class: 'chip', onclick: () => wyborStacji(stacje, (w) => { stacje = w; stBtn.textContent = opisStacji(w); stBtn.classList.toggle('akt', !!w.length); }, { tytul: 'Alert tylko dla stacji' }) }, 'Wszystkie stacje');
+    const raport = el('input', { type: 'checkbox', checked: !!S.moje.raport });
+    raport.addEventListener('change', () => serwer('zapiszMoje', { raport: raport.checked }).then((m) => { S.moje = m; toast(raport.checked ? 'Raport włączony' : 'Raport wyłączony'); }).catch((e) => toast(e.message)));
+    rysuj();
+    box.replaceChildren(el('h1', {}, 'Alerty i ustawienia'),
+      karta('Alerty e-mail', 'Gdy wybrany wykonawca albo utwór pojawi się na antenie, dostaniesz e-mail na adres konta, na którym działa panel. Sprawdzane przy każdej aktualizacji (co godzinę); w sieciach ta sama emisja na kilku stacjach to jeden alert. Alert dla utworu ustawisz dzwonkiem w jego profilu.',
+        el('div', { class: 'wiersz', style: { margin: '8px 0' } }, pole, stBtn, el('button', { class: 'przycisk', onclick: () => {
+          if (!pole.value.trim()) return;
+          lista.push({ typ: 'wykonawca', tekst: pole.value.trim(), opis: pole.value.trim(), stacje }); pole.value = ''; zapisz();
+        } }, 'Dodaj')), tab,
+        el('h3', { style: { margin: '14px 0 4px' } }, 'Alerty dzienne'),
+        el('p', { class: 'sub' }, 'Sprawdzane raz dziennie po 8:00 za dobę wczorajszą, jeden e-mail z listą. Top 10 dotyczy wybranych wyżej stacji (bez wyboru: całe radio); pierwszy dzień tylko zapamiętuje obecne top 10.'),
+        el('div', { class: 'wiersz', style: { margin: '6px 0' } },
+          el('button', { class: 'chip', onclick: () => { lista.push({ typ: 'top10', opis: 'Nowy utwór w top 10 – ' + opisStacji(stacje), stacje }); zapisz(); } }, '+ Wejście do top 10'),
+          el('button', { class: 'chip', onclick: () => { if (lista.some((a) => a.typ === 'debiut3')) return toast('Ten alert już jest'); lista.push({ typ: 'debiut3', opis: 'Debiut na ≥ 3 stacjach w 7 dni' }); zapisz(); } }, '+ Debiut na ≥ 3 stacjach'),
+          el('button', { class: 'chip', onclick: () => { const t = pole.value.trim(); lista.push(t ? { typ: 'powrot', tekst: t, opis: 'Powrót: ' + t } : { typ: 'powrot', klucz: '_powrot', opis: 'Powrót dowolnego wykonawcy (≥ 30 emisji w bazie)' }); pole.value = ''; zapisz(); } }, '+ Powrót po ≥ 90 dniach'),
+        ),
+        el('p', { class: 'sub' }, 'Powrót: wpisz wykonawcę w polu wyżej, żeby śledzić tylko jego; puste pole = wszyscy wykonawcy z ≥ 30 emisjami.')),
+      karta('Raport tygodniowy', null, el('label', { class: 'wiersz', style: { cursor: 'pointer' } }, raport, 'W poniedziałki ok. 7:00 wyślij mi e-mail: wschodzące, debiuty, top 5 ulubionych stacji, alerty z tygodnia.'),
+        el('p', { class: 'sub', style: { marginTop: '6px' } }, 'Wymaga jednorazowego uruchomienia funkcji zainstalujPanel w edytorze skryptu.')),
+      karta('Link do widoku', 'Każdy widok ma własny adres (stacje, okres, utwór) – skopiuj go, by wrócić tu później albo otworzyć na telefonie.',
+        el('button', { class: 'przycisk drugi', onclick: () => navigator.clipboard && navigator.clipboard.writeText(S.start.adres || window.ADRES_PANELU).then(() => toast('Skopiowano adres panelu')) }, 'Kopiuj adres panelu')),
+      kartaPrzypomnien(), kartaNtfy(), kartaUstawien(), kartaPomiarow());
+  }).catch((e) => bladW(box, e));
+};
+</script>

@@ -1,0 +1,42 @@
+<!-- Wygenerowane przez narzedzia/zbuduj_panel.py z apps-script/wspolne/Wspolne.gs (klucz utworu), narzedzia/wulgaryzmy.json – nie edytować ręcznie -->
+<script>
+var NIE_PIOSENKI = ['fakty', 'wiadomosci', 'serwis informacyjny', 'reklama', 'jingiel', 'dzingiel'];
+// ---------------- klucz utworu (port scraper/normalize.py) ----------------
+
+function bezZnakow_(s) {
+  s = String(s || '').toLowerCase().replace(/ł/g, 'l').replace(/[’\x60]/g, "'").replace(/\x22/g, "'");
+  return s.normalize('NFKD').replace(/[̀-ͯ᪰-᫿᷀-᷿⃐-⃿︠-︯]/g, '');
+}
+var DOPISKI_ = /\([^)]*\)|\[[^\]]*\]/g;
+function tytulKlucz(t) {
+  t = bezZnakow_(t).replace(DOPISKI_, ' ');
+  t = (' ' + t).replace(/\s(?:feat\.?|ft\.?|featuring)\s[\s\S]*$/, ' ');
+  return t.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+function wykonawcaKlucz(a) {
+  a = bezZnakow_(a).replace(DOPISKI_, ' ').replace(/^the\s+/, '');
+  return a.replace(/[^a-z0-9]+/g, ' ').trim();
+}
+var SEPARATORY_ = /\s*(?:\/|&|,|\sx\s|\sfeat\.?\s|\sft\.?\s|\sfeaturing\s|\svs\.?\s)\s*/i;
+// przedrostki nazw stacji dopisywane w metadanych strumienia (np. Muzo FM: „Eska Rock: Kult – Baranek”)
+var PRZEDROSTKI_STACJI_ = /^\s*(?:eska rock|radio eska rock)\s*:\s*/i;
+function oczyscWykonawce(a) { return String(a || '').replace(PRZEDROSTKI_STACJI_, ''); }
+function wykonawcyKlucz(a) {
+  return oczyscWykonawce(a).split(SEPARATORY_).map(wykonawcaKlucz).filter(Boolean);
+}
+function kluczUtworu(a, t) {
+  var w = wykonawcyKlucz(a);
+  return (w[0] || '') + '|' + tytulKlucz(t);
+}
+// sama nazwa stacji jako wykonawca = komunikat stacji (np. „Eska Rock – Pobierz Apkę i Słuchaj Wszędzie!”)
+var NAZWY_STACJI_JAKO_WYKONAWCA_ = ['eska rock', 'radio eska rock', 'eska', 'radio eska', 'rmf fm', 'radio zet', 'radio meteor', 'antyradio'];
+function czyPiosenka(a, t) {
+  if (!String(a || '').trim() || !String(t || '').trim()) return false;
+  var al = String(a).toLowerCase();
+  if (NAZWY_STACJI_JAKO_WYKONAWCA_.indexOf(wykonawcaKlucz(a)) >= 0) return false;
+  return !NIE_PIOSENKI.some(function (x) { return al.indexOf(x) >= 0; });
+}
+
+
+var WULGARYZMY = {"pl":{"przedrostki":["s","z","ze","za","wy","od","ode","roz","roze","prze","przy","po","u","na","do","ob","w","we","pod","nad","o","wz","nie"],"rdzenie2":["kurw","chuj","huj","pierdol","pierdal","jeb","pizd","kutas","fiut","dziwk"],"slowa2":["cipa","cipach","cipe","cipie","cipka","cipke","cipki","cipko","cipom","cipy"],"rdzenie1":["gown","pierdz","pierdn","pierdy","sracz","srac","sral","srasz","sram","sraj","sraka"],"slowa1":["dupa","dupy","dupie","dupe","dupo","dupom","dupami","dupach","dupek","dupka","dupki","dupsko","suka","suki","suko","suce","szmata","szmaty","szmato","cwel","cwele","cwelu","pedal","pedaly","pedale"]},"en":{"rdzenie2":["fuck","shit","cunt","nigga","nigger","bitch","whore","slut","asshole","motherf","wanker","twat"],"slowa2":["dick","dicks","pussy","pussies","fag","fags","faggot","faggots","bullshit"],"slowa1":["ass","asses","damn","goddamn","bastard","bastards","cock","cocks","hoe","hoes","piss","pissed","crap","bollocks","tits","boobs","dumbass","jackass"]}};
+</script>

@@ -20,8 +20,10 @@ from __future__ import annotations
 import argparse
 import base64
 import gzip
+import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -43,12 +45,25 @@ def _gz_json(b: bytes):
         return gzip.decompress(base64.b64decode(b))
 
 
-def synchronizuj(mag, katalog: str) -> dict:
-    """Pliki z Odbiornika do katalog/pliki (tylko zmienione od poprzedniego razu – manifest). Zwraca listę zmienionych."""
+def synchronizuj(mag, katalog: str, tryb: str = "lista") -> dict:
+    """Pliki z Odbiornika do katalog/pliki (tylko zmienione od poprzedniego razu – manifest). Zwraca listę zmienionych.
+    tryb „lista” – widoki i surowe emisje (SQL), „drzewo” – pliki panelu dla aplikacji offline (PWA)."""
     os.makedirs(os.path.join(katalog, "pliki"), exist_ok=True)
     sc_man = os.path.join(katalog, "manifest.json")
     man = json.load(open(sc_man)) if os.path.exists(sc_man) else {}
-    lista = mag.wyslij("eksportPlikow", lista=True)["pliki"]
+    lista = mag.lista_partiami("eksportPlikow", **{tryb: True})
+    if tryb == "drzewo":   # na Dysku bywa kilka kopii o tej samej nazwie – najnowsza
+        naj = {}
+        for p in lista:
+            if p["s"] not in naj or p["t"] > naj[p["s"]]["t"]:
+                naj[p["s"]] = p
+        lista = sorted(naj.values(), key=lambda p: p["s"])
+        json.dump(lista, open(os.path.join(katalog, "drzewo_lista.json"), "w"))
+        for s in [s for s in man if s.startswith("d/") and s not in naj]:   # usunięte na Dysku
+            sc = _lok(katalog, s)
+            if os.path.isfile(sc):
+                os.remove(sc)
+            del man[s]
     zmienione = [p for p in lista if man.get(p["s"]) != p["t"] or not os.path.exists(_lok(katalog, p["s"]))]
     print(f"Plików w Odbiorniku: {len(lista)}, do pobrania: {len(zmienione)} ({sum(p['b'] for p in zmienione) / 1e6:.1f} MB)", flush=True)
     i = 0
@@ -73,7 +88,70 @@ def synchronizuj(mag, katalog: str) -> dict:
 
 
 def _lok(katalog: str, s: str) -> str:
-    return os.path.join(katalog, "pliki", *s.split("/"))
+    cz = s.split("/")
+    if any(c in ("", ".", "..") for c in cz):
+        raise ValueError("niedozwolona ścieżka: " + s)
+    return os.path.join(katalog, "pliki", *cz)
+
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PLIKI_PANELU_GS = ["wspolne/Wspolne.gs", "panel/Panel.gs", "panel/Start.gs", "panel/Analizy.gs", "panel/Spotify.gs", "panel/Dyrektor.gs"]
+PACZKA_MAX = 20 * 1024 * 1024
+
+
+def zbuduj_paczki(katalog: str, wyjscie: str) -> dict:
+    """PWA: pliki panelu w paczkach (folder × rok z nazwy pliku) → dane/p/<id>.bin + spis dane/drzewo.json.
+    Format paczki: 4 bajty (długość nagłówka, little endian) + nagłówek JSON [[ścieżka, przesunięcie, długość]] + treści."""
+    lista = json.load(open(os.path.join(katalog, "drzewo_lista.json")))
+    grupy: dict[str, list] = {}
+    for p in lista:
+        sc = p["s"][2:]
+        folder, nazwa = (sc.rsplit("/", 1) if "/" in sc else ("", sc))
+        rok = nazwa[:4] if nazwa[:4].isdigit() else "_"
+        grupy.setdefault(folder + "|" + rok, []).append(p)
+    os.makedirs(os.path.join(wyjscie, "dane", "p"), exist_ok=True)
+    paczki, pliki = {}, {}
+    for klucz in sorted(grupy):
+        czesci, biez, b = [], [], 0
+        for p in grupy[klucz]:
+            if biez and b + p["b"] > PACZKA_MAX:
+                czesci.append(biez); biez, b = [], 0
+            biez.append(p); b += p["b"]
+        czesci.append(biez)
+        for n, cz in enumerate(czesci):
+            pid = hashlib.sha1(klucz.encode()).hexdigest()[:12] + (f"-{n}" if n else "")
+            nagl, tresci, off = [], [], 0
+            for p in cz:
+                t = open(_lok(katalog, p["s"]), "rb").read()
+                nagl.append([p["s"][2:], off, len(t)]); tresci.append(t); off += len(t)
+                pliki[p["s"][2:]] = [p["b"], p["t"], pid]
+            nb = json.dumps(nagl, ensure_ascii=False).encode()
+            dane = len(nb).to_bytes(4, "little") + nb + b"".join(tresci)
+            with open(os.path.join(wyjscie, "dane", "p", pid + ".bin"), "wb") as f:
+                f.write(dane)
+            paczki[pid] = {"k": klucz, "b": len(dane), "h": hashlib.sha1(json.dumps([[p["s"], p["t"], p["b"]] for p in cz]).encode()).hexdigest()[:16]}
+    drzewo = {"zbudowano": time.strftime("%d.%m.%Y %H:%M", time.localtime()), "paczki": paczki, "pliki": pliki}
+    json.dump(drzewo, open(os.path.join(wyjscie, "dane", "drzewo.json"), "w"), ensure_ascii=False, separators=(",", ":"))
+    print(f"Aplikacja: {len(pliki)} plików panelu w {len(paczki)} paczkach, {sum(p['b'] for p in paczki.values()) / 1e6:.1f} MB", flush=True)
+    return drzewo
+
+
+def zbuduj_aplikacje(wyjscie: str) -> None:
+    """PWA: interfejs panelu (Index.html z dołączonymi plikami) + silnik z kodem panelu (.gs) + pliki aplikacji."""
+    zr = os.path.join(REPO, "apps-script")
+    h = open(os.path.join(zr, "panel", "Index.html"), encoding="utf-8").read()
+    h = re.sub(r"<\?!= include\('(\w+)'\) \?>", lambda m: open(os.path.join(zr, "panel", m.group(1) + ".html"), encoding="utf-8").read(), h)
+    h = h.replace("<?!= parametry ?>", "(window.PARAMETRY_PWA || {})").replace("<?!= adres ?>", "(location.origin + '/')")
+    if "<?" in h:
+        raise RuntimeError("Index.html: nieobsłużony znacznik szablonu " + h[h.index("<?"):h.index("<?") + 40])
+    pw = os.path.join(REPO, "pwa")
+    h = h.replace("<head>", "<head>\n" + open(os.path.join(pw, "powloka.html"), encoding="utf-8").read(), 1)
+    open(os.path.join(wyjscie, "index.html"), "w", encoding="utf-8").write(h)
+    with open(os.path.join(wyjscie, "panel.js"), "w", encoding="utf-8") as f:
+        for p in PLIKI_PANELU_GS:
+            f.write(f"// ---- {p} ----\n" + open(os.path.join(zr, p), encoding="utf-8").read() + "\n")
+    for n in ("silnik.js", "srodowisko.js", "fflate.js", "sw.js", "manifest.webmanifest", "ikona-192.png", "ikona-512.png", "ikona-maskowalna-512.png"):
+        shutil.copy(os.path.join(pw, n), os.path.join(wyjscie, n))
 
 
 def zbuduj_parquet(katalog: str, wyjscie: str, zmienione: set | None) -> list[dict]:
@@ -135,6 +213,11 @@ def zbuduj_strone(katalog: str, wyjscie: str, zmienione: set | None) -> dict:
     szablon = os.path.join(os.path.dirname(__file__), "szablon_cf")
     for n in os.listdir(szablon):
         shutil.copy(os.path.join(szablon, n), os.path.join(wyjscie, n))
+    if os.path.exists(os.path.join(katalog, "drzewo_lista.json")):   # PWA: aplikacja pod głównym adresem, SQL – sql.html
+        zbuduj_paczki(katalog, wyjscie)
+        zbuduj_aplikacje(wyjscie)
+    else:
+        shutil.copy(os.path.join(szablon, "sql.html"), os.path.join(wyjscie, "index.html"))
     plikow = sum(len(f) for _, _, f in os.walk(wyjscie))
     print(f"Strona: {len(widoki)} widoków, {len(parquet)} plików Parquet ({sum(p['b'] for p in parquet) / 1e6:.1f} MB), razem plików {plikow} (limit Pages 20 000)", flush=True)
     return spis
@@ -175,7 +258,12 @@ def main(argv: list[str] | None = None) -> int:
     zmienione = None
     if not a.bez_pobierania:
         from .magazyn import MagazynDysk
-        zmienione = synchronizuj(MagazynDysk(), a.katalog)
+        mag = MagazynDysk()
+        zmienione = synchronizuj(mag, a.katalog)
+        try:
+            synchronizuj(mag, a.katalog, "drzewo")
+        except RuntimeError as e:   # Odbiornik bez trybu drzewa (stary OdbiornikEksport.gs) – strona bez aplikacji
+            print(f"Pliki aplikacji offline niedostępne ({e}) – publikuję bez niej.", flush=True)
     wyjscie = os.path.join(a.katalog, "strona")
     if a.bez_publikacji:
         zbuduj_strone(a.katalog, wyjscie, zmienione)

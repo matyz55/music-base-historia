@@ -1,0 +1,163 @@
+<!-- Wygenerowane przez narzedzia/zbuduj_panel.py z panel/vendor/songster-match.js – nie edytować ręcznie -->
+<script>
+// Skopiowane bez zmian z gry Songster (github.com/matyz55/songster, plik match.js, commit b796806).
+// Przy zmianach w Songsterze skopiuj plik ponownie – nie edytuj tutaj.
+'use strict';
+
+// Dobór właściwego nagrania z wyników iTunes Search API.
+// Wspólne dla gry (js/*.js) i skryptu sprawdzającego listę piosenek.
+(function (root) {
+  const norm = (s) => s.toLowerCase().replace(/ł/g, 'l').normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '');
+
+  // tytuł bez dopisków w nawiasach i po myślniku, np. „(2011 Remaster)”, „- Radio Edit”
+  const baseTitle = (t) => norm(t.replace(/\s*[([].*?[)\]]/g, '').replace(/\s+[-–]\s+.*$/, ''));
+
+  // wersje, które nie są oryginalnym nagraniem studyjnym
+  const UNWANTED = /\b(live|na żywo|koncert|remix|remixes|mix|karaoke|instrumental|acoustic|akustycz\w*|unplugged|cover|tribute|re-?recorded|demo|sped up|slowed|pianoforte|orchestral|symphonic|wersja|without rap|taylor\x27s|męskie granie)\b|\(\s*\d{4}\s+ii\s*\)/i;
+  // „... Version” / „... Edit” dopuszczamy tylko w neutralnych odmianach
+  const OK_VERSION = /\b(single|album|mono|stereo|original|radio|soundtrack|us|uk|explicit|clean|edited|bonus track|remastered|\d{4} remastered)\s+(version|edit)\b/gi;
+  const BAD_VERSION = /\b(version|edit|versión)\b/i;
+
+  // ma – główny wykonawca, gdy jego nazwa sama zawiera „&” (np. „Simon & Garfunkel”)
+  // x – kolejni wykonawcy (trzeci i dalsi), jeśli piosenkę nagrało więcej osób
+  function artistsOf(song) {
+    const listed = song.ma && song.a.startsWith(song.ma)
+      ? [song.ma, ...song.a.slice(song.ma.length).split(/ & | feat\. /).filter(Boolean)]
+      : song.a.split(/ & | feat\. /);
+    return [...listed, ...(song.x || [])];
+  }
+
+  // duety zapisane jedną nazwą: „KARAŚ/ROGUCKI”, „Coverdale/Page”, „Ørganek | ØNA”, „Axwell /\ Ingrosso”.
+  // Dzielimy tylko, gdy obie części mają co najmniej 4 znaki – „AC/DC” czy „HUNTR/X” zostają całe.
+  function duoParts(name) {
+    const parts = name.split(/\s*(?:\/\\|\/|\|)\s*/).map((p) => p.trim()).filter(Boolean);
+    return parts.length > 1 && parts.every((p) => norm(p).length >= 4) ? parts : [];
+  }
+
+  function mainArtist(song) {
+    return artistsOf(song)[0];
+  }
+
+  function isUnwanted(r, song) {
+    const track = r.trackName || '';
+    if (UNWANTED.test(track) || UNWANTED.test(r.collectionName || '')) return true;
+    // song.nx – albumy z późniejszymi nagraniami tego wykonawcy (np. „Lombard Swing”)
+    if (song.nx && new RegExp(song.nx, 'i').test(r.collectionName || '')) return true;
+    // „(2013)” przy utworze z 2000 r. oznacza zwykle nowe nagranie
+    const yr = track.match(/\(\s*(\d{4})\s*\)/);
+    if (yr && song.y && Number(yr[1]) > song.y + 1) return true;
+    return BAD_VERSION.test(track.replace(OK_VERSION, ''));
+  }
+
+  // wykonawca musi się zgadzać dokładnie – w całości albo jako jeden z wymienionych
+  // („Prince” w „Prince & The Revolution”), a nie jako fragment nazwy („Magma” w „Magical Magma”)
+  // „&” i „and” traktujemy jednakowo („Dick & Dee Dee” = „Dick and Dee Dee”)
+  const artistKey = (s) => norm(s.replace(/^the /i, '').replace(/&|\band\b/gi, ' '));
+  function artistMatches(name, wantArtist) {
+    const want = artistKey(wantArtist);
+    if (artistKey(name) === want) return true;
+    return name.split(/\s*(?:&|,|\+|\/|\bfeat\.?|\bft\.|\bfeaturing\b|\bwith\b|\bvs\.?|\bx\b|\band\b|\bi\b)\s*/i)
+      .some((part) => artistKey(part) === want);
+  }
+
+  function isLaterDuet(r, song) {
+    const year = parseInt((r.releaseDate || '').slice(0, 4), 10);
+    if (!song.y || !year || year <= song.y + 10) return false;
+    const known = new Set([...artistsOf(song), song.ia].filter(Boolean).map((a) => norm(a.replace(/^the /i, ''))));
+    // goście wymienieni w wykonawcy albo w tytule („Szklana pogoda (feat. Marta Cugier)”)
+    const guests = ((r.trackName || '').match(/[([](?:feat\.?|ft\.|with|featuring)\s+([^)\]]+)[)\]]/i) || [])[1] || '';
+    const credited = [r.artistName || '', guests].join(' & ').split(/\s*(?:&|,|\bfeat\.?|\bft\.|\bx\b|\band\b|\bi\b)\s*/i)
+      .map((a) => norm(a.replace(/^the /i, ''))).filter(Boolean);
+    const whole = norm((r.artistName || '').replace(/^the /i, ''));
+    if (known.has(whole) && !guests) return false;
+    return credited.some((a) => ![...known].some((k) => k.includes(a) || a.includes(k)));
+  }
+
+  function pickPreview(results, song) {
+    const wantArtist = norm(mainArtist(song).replace(/^the /i, ''));
+    // song.ia – wykonawca, pod którym nagranie jest w iTunes (np. wokalistka zespołu)
+    const wanted = [mainArtist(song), song.ia].filter(Boolean);
+    // song.m – opcjonalny tytuł, pod jakim utwór figuruje w iTunes (np. „Pt. 2” zamiast „Part 2”)
+    const titles = [song.t, song.m].filter(Boolean);
+    const exact = new Set(titles.map(norm));
+    const base = new Set(titles.map(baseTitle));
+    let best = null;
+    let bestScore = 0;
+    for (const r of results) {
+      if (!r.previewUrl || isUnwanted(r, song)) continue;
+      const artist = norm((r.artistName || '').replace(/^the /i, ''));
+      if (!wanted.some((w) => artistMatches(r.artistName || '', w))) continue;
+      // nowe nagranie z gościem (np. „Maryla Rodowicz & Lanberry” 2025 zamiast „Małgośki” z 1973 r.):
+      // dodatkowy wykonawca spoza piosenki + wydanie ponad 10 lat po roku piosenki → pomijamy
+      if (isLaterDuet(r, song)) continue;
+      const track = r.trackName || '';
+      let score;
+      if (exact.has(norm(track))) score = 4;
+      else if (base.has(baseTitle(track))) score = 2;
+      else continue;
+      if (song.m && norm(track) === norm(song.m)) score += 1;
+      if (artist === wantArtist) score += 2;
+      else if (artist.startsWith(wantArtist)) score += 1;
+      // song.al – fragment nazwy albumu z oryginalnym nagraniem (podpowiedź przy wielu wersjach)
+      if (song.al && norm(r.collectionName || '').includes(norm(song.al))) score += 1;
+      if (score > bestScore) { best = r; bestScore = score; }
+    }
+    return best;
+  }
+
+  /* ---------- sprawdzanie odpowiedzi (tryb „Jaka to melodia”) ---------- */
+
+  function levenshtein(a, b) {
+    if (a === b) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i++) {
+      const cur = [i];
+      for (let j = 1; j <= b.length; j++) {
+        cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
+
+  // ile literówek wybaczamy – zależnie od długości odpowiedzi
+  const tolerance = (len) => (len <= 3 ? 0 : len <= 6 ? 1 : len <= 12 ? 2 : 3);
+
+  const answerNorm = (s) => norm(s.replace(/&/g, ' and ').replace(/^\s*(the|a)\s+/i, ''));
+
+  function fuzzyEqual(guess, variants) {
+    const g = answerNorm(guess);
+    if (!g) return false;
+    return variants.some((v) => {
+      const n = answerNorm(v);
+      return n && levenshtein(g, n) <= tolerance(n.length);
+    });
+  }
+
+  function titleVariants(t) {
+    const noParens = t.replace(/\s*[([].*?[)\]]/g, '').trim();
+    const inParens = (t.match(/[([](.*?)[)\]]/) || [])[1];
+    // „A / B” (np. obie strony singla) – zaliczamy każdą część
+    // („24/7” czy „AC/DC” zostają całe – dzielimy tylko, gdy każda część ma co najmniej 4 znaki)
+    const parts = t.split(/\s*\/\s*/);
+    const slashParts = parts.length < 2 ? [] : parts.every((x) => norm(x).length >= 4) ? parts : norm(parts[0]).length >= 4 ? [parts[0]] : [];
+    return [t, noParens, ...slashParts, inParens && noParens.length < 4 ? inParens : null].filter(Boolean);
+  }
+
+  function artistVariants(song) {
+    const a = song.a;
+    const listed = artistsOf(song).map((p) => p.trim()).filter(Boolean);
+    const parts = [...listed, ...listed.flatMap(duoParts)];
+    // samo nazwisko przy dwuczłonowych nazwach („Bregović”, „Presley”)
+    const surnames = parts.map((p) => p.trim().split(/\s+/)).filter((w) => w.length === 2 && w[1].length >= 4).map((w) => w[1]);
+    return [a, ...parts, ...surnames];
+  }
+
+  const checkTitle = (guess, song) => fuzzyEqual(guess, titleVariants(song.t));
+  const checkArtist = (guess, song) => fuzzyEqual(guess, artistVariants(song));
+
+  root.SongMatch = { norm, pickPreview, mainArtist, artistsOf, levenshtein, checkTitle, checkArtist };
+}(typeof window !== 'undefined' ? window : globalThis));
+
+</script>

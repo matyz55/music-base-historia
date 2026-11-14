@@ -1,0 +1,202 @@
+<!-- Wygenerowane przez narzedzia/zbuduj_panel.py z panel/media.js – nie edytować ręcznie -->
+<script>
+'use strict';
+
+// Profil piosenki: fragment do odsłuchu (iTunes Search API) i linki do YouTube, Spotify i Apple Music.
+// Ten sam sposób co w grze Songster (js/core.js): wyszukiwanie w przeglądarce użytkownika, wybór nagrania
+// przez SongMatch.pickPreview (panel/vendor/songster-match.js), kolejka zapytań i pamięć wyników.
+//
+// Dlaczego w przeglądarce, a nie na serwerze Apps Script: iTunes ma limit zapytań, a serwery Google są
+// współdzielone. Test 11.11.2026 z serwera w chmurze: pierwsze zapytanie OK, kolejne – 403.
+// Odpowiedzi iTunes mają nagłówek Access-Control-Allow-Origin: *, więc przeglądarka może pytać bezpośrednio.
+(function (root) {
+  const SongMatch = root.SongMatch;
+
+  // ---- utwór z radia → format, którego oczekuje SongMatch (a, t, y, x) ----
+  // Radio zapisuje wielu wykonawców przez „ / ” (np. „Kygo / Max Mcnown”), Songster przez „ & ”.
+  function doSongMatch(u) {
+    const a = (u.a || '').split(/\s+\/\s+/).join(' & ');
+    return { a, t: u.t || '', y: u.y || undefined, sp: u.sp, ma: u.ma, ia: u.ia, x: u.x, m: u.m, al: u.al, nx: u.nx, q: u.q };
+  }
+
+  // ---- pamięć wyników (localStorage) – jak w Songsterze: 30 dni dla trafień, 3 dni dla „brak fragmentu” ----
+  const TTL = 30 * 864e5;
+  const TTL_BRAK = 3 * 864e5;
+  const KLUCZ = 'mbs-fragmenty-v2';   // v2 (12.11.2026): numer utworu, czas, płyta – stare wpisy bez tych pól
+  const pamiec = new Map();
+  let zapisane = {};
+  try { zapisane = JSON.parse(localStorage.getItem(KLUCZ) || '{}'); localStorage.removeItem('mbs-fragmenty-v1'); } catch (e) { zapisane = {}; }
+  function zapamietaj(k, wynik) {
+    zapisane[k] = { d: Date.now(), r: wynik };
+    try { localStorage.setItem(KLUCZ, JSON.stringify(zapisane)); } catch (e) { /* brak miejsca lub tryb prywatny */ }
+  }
+
+  // ---- kolejka: najwyżej 18 zapytań na minutę; po 403/429 przerwa 60 s (jak w Songsterze) ----
+  const kolejka = { czasy: [], blokadaDo: 0, lancuch: Promise.resolve() };
+  function tura() {
+    const run = async () => {
+      for (;;) {
+        const now = Date.now();
+        kolejka.czasy = kolejka.czasy.filter((t) => now - t < 60000);
+        const pelna = kolejka.czasy.length >= 18 ? 60000 - (now - kolejka.czasy[0]) + 100 : 0;
+        const czekaj = Math.max(kolejka.blokadaDo - now, pelna, 0);
+        if (!czekaj) { kolejka.czasy.push(now); return; }
+        await new Promise((r) => setTimeout(r, Math.min(czekaj, 2000)));
+      }
+    };
+    kolejka.lancuch = kolejka.lancuch.then(run);
+    return kolejka.lancuch;
+  }
+
+  async function pobierz(url) {
+    for (let proba = 0; proba < 3; proba += 1) {
+      await tura();
+      try {
+        const res = await fetch(url);
+        if (res.status === 403 || res.status === 429) { kolejka.blokadaDo = Date.now() + 60000; continue; }
+        if (res.ok) return res;
+      } catch (e) { /* sieć – kolejna próba */ }
+      await new Promise((r) => setTimeout(r, 1000 * (proba + 1)));
+    }
+    return null;
+  }
+
+  // Zwraca { url, art, link, ex } albo null, gdy iTunes nie ma pasującego nagrania.
+  async function znajdzFragment(utwor) {
+    const song = doSongMatch(utwor);
+    const k = `${SongMatch.norm(song.a)}|${SongMatch.norm(song.t)}`;
+    if (pamiec.has(k)) return pamiec.get(k);
+    const z = zapisane[k];
+    if (z && Date.now() - z.d < (z.r ? TTL : TTL_BRAK)) { pamiec.set(k, z.r); return z.r; }
+    const term = song.q || `${SongMatch.mainArtist(song)} ${song.t}`;
+    let wynik = null;
+    let bladSieci = false;
+    for (const country of ['PL', 'US']) {
+      const url = 'https:\/\/itunes.apple.com/search?' + new URLSearchParams({ term, entity: 'song', limit: '25', country });
+      const res = await pobierz(url);
+      if (!res) { bladSieci = true; continue; }
+      const dane = await res.json();
+      const hit = SongMatch.pickPreview(dane.results || [], song);
+      if (hit) {
+        wynik = {
+          url: hit.previewUrl,
+          art: (hit.artworkUrl100 || '').replace('100x100', '300x300'),
+          link: hit.trackViewUrl,
+          ex: hit.trackExplicitness === 'explicit' ? 1 : 0,
+          album: hit.collectionName || null,
+          wydanie: (hit.releaseDate || '').slice(0, 10) || null,
+          gatunek: hit.primaryGenreName || null,
+          duza: (hit.artworkUrl100 || '').replace('100x100', '600x600'),
+          // dane do karty „Dane utworu” (iTunes Search API)
+          nr: hit.trackNumber || null, zIlu: hit.trackCount || null, plyta: hit.discNumber || null, plyt: hit.discCount || null,
+          czas: hit.trackTimeMillis || null, wykAlbumu: hit.collectionArtistName || null, albumLink: hit.collectionViewUrl || null,
+          kraj: country,
+        };
+        break;
+      }
+    }
+    // „brak fragmentu” zapamiętujemy tylko, gdy iTunes faktycznie odpowiedział
+    if (wynik || !bladSieci) { pamiec.set(k, wynik); zapamietaj(k, wynik); }
+    return wynik;
+  }
+
+  // ---- linki do serwisów (jak streamUrl w Songsterze) ----
+  // YouTube: wyszukiwanie (bez klucza API i bez limitu). Spotify: utwór, gdy znamy jego identyfikator, inaczej wyszukiwanie.
+  // Apple Music: utwór z wyniku iTunes, inaczej wyszukiwanie.
+  function linkDo(utwor, fragment, serwis) {
+    const song = doSongMatch(utwor);
+    const q = encodeURIComponent(`${SongMatch.mainArtist(song)} ${song.t}`);
+    if (serwis === 'spotify') return song.sp ? `https:\/\/open.spotify.com/track/${song.sp}` : `https:\/\/open.spotify.com/search/${q}`;
+    if (serwis === 'apple') return fragment && fragment.link ? fragment.link : `https:\/\/music.apple.com/search?term=${q}`;
+    return utwor.yt ? `https:\/\/www.youtube.com/watch?v=${utwor.yt}` : `https:\/\/www.youtube.com/results?search_query=${q}`;
+  }
+
+  const NAZWY = { youtube: 'YouTube', spotify: 'Spotify', apple: 'Apple Music' };
+  // ikonki z Songstera (js/core.js, PLATFORM_ICONS)
+  const IKONY = {
+    youtube: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="4.5" width="22" height="15" rx="4.5" fill="#FF0000"/><path d="M10 8.6v6.8l5.8-3.4z" fill="#fff"/></svg>',
+    spotify: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="11" fill="#1ED760"/><path d="M6.6 9.3c3.8-1.1 8-.8 11.1 1M7.2 12.5c3.1-.9 6.5-.6 9.2.9M7.8 15.5c2.4-.6 4.9-.4 7 .7" stroke="#000" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg>',
+    apple: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="1" y="1" width="22" height="22" rx="5.5" fill="#FA2D48"/><path d="M15.6 5.4v9.4a2.3 2.3 0 1 1-1.4-2.1V8.3l-5 1.1v6.7a2.3 2.3 0 1 1-1.4-2.1V7.2z" fill="#fff"/></svg>',
+  };
+  // Android: link „intent://” otwiera od razu aplikację (Brave na Androidzie tego nie obsługuje – zwykłe linki)
+  const PAKIETY = { youtube: 'com.google.android.youtube', spotify: 'com.spotify.music', apple: 'com.apple.android.music' };
+  const ANDROID = /Android/i.test(navigator.userAgent) && !navigator.brave;
+  function intent(url, serwis) {
+    const u = new URL(url);
+    return `intent:\/\/${u.host}${u.pathname}${u.search}#Intent;scheme=https;package=${PAKIETY[serwis]};end`;
+  }
+
+  function ikonyOdsluchu(utwor, fragment) {
+    const box = document.createElement('div');
+    box.className = 'odsluch-linki';
+    for (const serwis of ['youtube', 'spotify', 'apple']) {
+      const a = document.createElement('a');
+      a.href = linkDo(utwor, fragment, serwis);
+      a.target = '_blank';
+      a.rel = 'noopener';
+      a.className = 'odsluch-ikona';
+      a.dataset.serwis = serwis;
+      a.title = `Posłuchaj w: ${NAZWY[serwis]}`;
+      a.setAttribute('aria-label', a.title);
+      a.innerHTML = IKONY[serwis];
+      if (ANDROID) a.addEventListener('click', (e) => { e.preventDefault(); window.location.href = intent(a.href, serwis); });
+      box.append(a);
+    }
+    return box;
+  }
+
+  // ---- odtwarzacz fragmentu na profilu piosenki ----
+  // Fragment z iTunes trwa zwykle do 30 s. Jeden odtwarzacz na stronę: start innego zatrzymuje poprzedni.
+  let aktywny = null;
+  function odtwarzacz(utwor, poFragmencie) {
+    const box = document.createElement('div');
+    box.className = 'odsluch';
+    box.innerHTML = '<div class="odsluch-okladka" aria-hidden="true"></div>'
+      + '<button type="button" class="odsluch-przycisk" disabled aria-label="Odtwórz fragment">'
+      + '<svg viewBox="0 0 24 24" aria-hidden="true"><path class="ikona-play" d="M8 5v14l11-7z"/>'
+      + '<path class="ikona-pauza" d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg></button>'
+      + '<div class="odsluch-opis"><div class="odsluch-status">Szukam fragmentu…</div>'
+      + '<div class="odsluch-pasek"><span></span></div></div>';
+    const przycisk = box.querySelector('.odsluch-przycisk');
+    const status = box.querySelector('.odsluch-status');
+    const pasek = box.querySelector('.odsluch-pasek span');
+    const okladka = box.querySelector('.odsluch-okladka');
+    const linki = ikonyOdsluchu(utwor, null);
+    box.append(linki);
+    const audio = new Audio();
+    audio.preload = 'none';
+
+    znajdzFragment(utwor).then((f) => {
+      if (!f) {
+        status.textContent = 'Brak fragmentu w Apple Music – posłuchaj w serwisach obok';
+        box.classList.add('brak');
+        return;
+      }
+      if (poFragmencie) { try { poFragmencie(f); } catch (e) { /* tylko informacja */ } }
+      audio.src = f.url;
+      if (f.art) okladka.style.backgroundImage = `url("${f.art}")`;
+      linki.querySelector('[data-serwis="apple"]').href = linkDo(utwor, f, 'apple');
+      status.textContent = f.ex ? 'Fragment 30 s · tekst oznaczony jako explicit' : 'Fragment 30 s';
+      przycisk.disabled = false;
+    }).catch(() => { status.textContent = 'Nie udało się wyszukać fragmentu'; box.classList.add('brak'); });
+
+    przycisk.addEventListener('click', () => {
+      if (audio.paused) {
+        if (aktywny && aktywny !== audio) aktywny.pause();
+        aktywny = audio;
+        audio.play().catch(() => { status.textContent = 'Przeglądarka zablokowała odtwarzanie'; });
+      } else audio.pause();
+    });
+    audio.addEventListener('play', () => { box.classList.add('gra'); przycisk.setAttribute('aria-label', 'Zatrzymaj fragment'); });
+    audio.addEventListener('pause', () => { box.classList.remove('gra'); przycisk.setAttribute('aria-label', 'Odtwórz fragment'); });
+    audio.addEventListener('ended', () => { pasek.style.width = '0%'; });
+    audio.addEventListener('timeupdate', () => {
+      if (audio.duration) pasek.style.width = `${(100 * audio.currentTime) / audio.duration}%`;
+    });
+    return box;
+  }
+
+  root.Odsluch = { odtwarzacz, ikonyOdsluchu, znajdzFragment, linkDo, doSongMatch };
+}(typeof window !== 'undefined' ? window : globalThis));
+
+</script>

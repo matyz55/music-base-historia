@@ -1,0 +1,737 @@
+<script>
+'use strict';
+// ======================= Music Base – rdzeń panelu =======================
+const $ = (s, r = document) => r.querySelector(s);
+const fmt = (n, d = 0) => (n == null || isNaN(n) ? '–' : Number(n).toLocaleString('pl-PL', { maximumFractionDigits: d }));
+const proc = (x) => (x == null || isNaN(x) ? '–' : (x * 100).toLocaleString('pl-PL', { maximumFractionDigits: 1 }) + '%');
+const dataPL = (iso, rok = true) => iso ? new Date(String(iso).slice(0, 10) + 'T12:00:00').toLocaleDateString('pl-PL', rok ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' }) : '–';
+const miesPL = (m) => m ? new Date(m + '-15T12:00:00').toLocaleDateString('pl-PL', { month: 'short', year: 'numeric' }) : '–';
+const DNI = ['pon', 'wt', 'śr', 'czw', 'pt', 'sob', 'ndz'];
+const dodajDni = (iso, n) => { const d = new Date(iso + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); };
+const roznicaDni = (a, b) => Math.round((new Date(String(b).slice(0, 10) + 'T12:00:00Z') - new Date(String(a).slice(0, 10) + 'T12:00:00Z')) / 864e5);
+const dzisISO = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 10);
+
+function el(tag, attrs, ...dzieci) {
+  const e = document.createElement(tag);
+  Object.entries(attrs || {}).forEach(([k, v]) => {
+    if (v === null || v === undefined || v === false) return;
+    if (k.startsWith('on') && typeof v === 'function') e.addEventListener(k.slice(2), v);
+    else if (k === 'html') e.innerHTML = v;
+    else if (k === 'style' && typeof v === 'object') Object.entries(v).forEach(([n, w]) => { if (n.startsWith('--')) e.style.setProperty(n, w); else e.style[n] = w; });
+    else e.setAttribute(k, v === true ? '' : v);
+  });
+  dzieci.flat(Infinity).forEach((d) => { if (d !== null && d !== undefined && d !== false) e.append(d.nodeType ? d : document.createTextNode(String(d))); });
+  return e;
+}
+const svgIkona = (d, extra = '') => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ${extra}>${d}</svg>`;
+const IK = {
+  mikrofon: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/>',
+  nuta: '<path d="M9 18V5l11-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="17" cy="16" r="3"/>',
+  start: '<path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/>',
+  ranking: '<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  szukaj: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  stacje: '<circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/>',
+  epg: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 4v16"/>',
+  analizy: '<path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-6"/>',
+  biuro: '<rect x="3" y="7" width="18" height="13" rx="2"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 13h18"/>',
+  porownaj: '<path d="M8 3v18M16 3v18M3 8h5M16 16h5"/>',
+  playlisty: '<path d="M3 6h12M3 12h12M3 18h8"/><circle cx="18" cy="17" r="3"/><path d="M21 17V5l-3 1"/>',
+  alerty: '<path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10 21a2 2 0 0 0 4 0"/>',
+  wiecej: '<circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/>',
+  gwiazda: '<path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1 6.2L12 17.3 6.5 20.2l1-6.2L3 9.6l6.2-.9z"/>',
+  graj: '<path d="M7 4v16l13-8z" fill="currentColor" stroke="none"/>',
+  pauza: '<path d="M7 4h4v16H7zM13 4h4v16h-4z" fill="currentColor" stroke="none"/>',
+  dalej: '<path d="m6 4 10 8-10 8z" fill="currentColor" stroke="none"/><path d="M18 4v16"/>',
+  zamknij: '<path d="M6 6l12 12M18 6 6 18"/>',
+  lista: '<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  dodaj: '<path d="M12 5v14M5 12h14"/>',
+  eksport: '<path d="M12 3v12M7 10l5 5 5-5"/><path d="M5 21h14"/>',
+  edytuj: '<path d="M4 20h4L19 9l-4-4L4 16z"/><path d="m13 7 4 4"/>',
+};
+
+// replaceChildren/append z pominięciem pustych pozycji (warunkowe sekcje widoków: `warunek ? karta(...) : null`).
+['replaceChildren', 'append', 'prepend'].forEach((m) => {
+  const f = Element.prototype[m];
+  Element.prototype[m] = function (...x) { return f.apply(this, x.filter((v) => v !== null && v !== undefined && v !== false && v !== '')); };
+});
+
+// ---------------- serwer z pamięcią podręczną ----------------
+const _pamiec = new Map();
+// pomiar czasów zapytań na tym urządzeniu (F9): ostatnie 60 wywołań każdej funkcji, osobno telefon i komputer
+const Pomiar = (() => {
+  const KL = 'mb-pomiary';
+  let d = {}, zapis = null;
+  try { d = JSON.parse(localStorage.getItem(KL) || '{}') || {}; } catch (e) { d = {}; }
+  const urz = () => (window.matchMedia('(max-width: 760px)').matches ? 'telefon' : 'komputer');
+  return {
+    // błąd: także jego treść (4. pole) – żeby z „Kopiuj pomiary” było widać, co zawiodło (14.11.2026 było widać tylko czas)
+    zapisz(fn, ms, ok, blad) {
+      const k = urz() + '|' + fn, a = d[k] = d[k] || [];
+      a.push(ok ? [Math.round(ms), 1, Date.now()] : [Math.round(ms), 0, Date.now(), String(blad || 'błąd bez opisu').slice(0, 160)]);
+      if (a.length > 60) a.splice(0, a.length - 60);
+      clearTimeout(zapis);
+      zapis = setTimeout(() => { try { localStorage.setItem(KL, JSON.stringify(d)); } catch (e) { /* bez pamięci */ } }, 1500);
+    },
+    tabela() {
+      return Object.keys(d).map((k) => {
+        const [u, fn] = k.split('|'), ms = d[k].map((x) => x[0]).sort((a, b) => a - b);
+        const bl = d[k].filter((x) => !x[1]);
+        return { urz: u, fn, n: ms.length, med: ms[Math.floor((ms.length - 1) / 2)], p90: ms[Math.floor((ms.length - 1) * 0.9)], max: ms[ms.length - 1], bledy: bl.length, blad: bl.length ? bl[bl.length - 1][3] || '' : '', ost: Math.max(...d[k].map((x) => x[2])) };
+      }).sort((a, b) => b.med - a.med);
+    },
+    wyczysc() { d = {}; try { localStorage.removeItem(KL); } catch (e) { /* bez pamięci */ } },
+  };
+})();
+// odSluchane zapisuje część apostrofów jako cudzysłów („It"s My Life”) – poprawiamy tylko wyświetlane nazwy
+// (wykonawca a, tytuł t, tytuł audycji); klucze utworów liczy serwer i są takie same dla obu zapisów
+const POLA_NAZW = { a: 1, t: 1, tytul: 1, wykonawca: 1, nazwaUtworu: 1 };
+function poprawNazwy(w, glebokosc = 0) {
+  if (!w || typeof w !== 'object' || glebokosc > 8) return w;
+  if (Array.isArray(w)) { for (let i = 0; i < w.length; i++) { if (typeof w[i] === 'object') poprawNazwy(w[i], glebokosc + 1); } return w; }
+  for (const k in w) {
+    const v = w[k];
+    if (typeof v === 'string') { if (POLA_NAZW[k] && v.indexOf('"') >= 0) w[k] = v.replace(/([\p{L}\d])\x22(\p{L})/gu, '$1\u2019$2'); }
+    else if (v && typeof v === 'object') poprawNazwy(v, glebokosc + 1);
+  }
+  return w;
+}
+function serwer(fn, ...args) {
+  const t0 = performance.now();
+  return new Promise((ok, zle) => {
+    google.script.run.withSuccessHandler((w) => { const bl = w && w.blad; Pomiar.zapisz(fn, performance.now() - t0, !bl, bl); return bl ? zle(new Error(w.blad)) : ok(poprawNazwy(w)); })
+      .withFailureHandler((e) => { Pomiar.zapisz(fn, performance.now() - t0, false, e && e.message || e); zle(e); })[fn](...args);
+  });
+}
+// ---- pamięć trwała w przeglądarce (F2): ostatnie odpowiedzi pokazywane od razu po otwarciu, świeże pobierane w tle ----
+const TRWALE = { prefiks: 'mb-pam1|', maks: 300000, wazne: 7 * 864e5 };
+// bez pamięci trwałej: dane na żywo, wyszukiwanie (szybkie), zapisy, Spotify i eksporty
+const BEZ_TRWALEJ = { teraz: 1, szukaj: 1, eksportCsv: 1, eksportApple: 1, alerty: 1, spotifyStan: 1, autoPlaylisty: 1, emisjeUtworu: 1 };
+function czytajTrwale(k) {
+  try { const v = localStorage.getItem(TRWALE.prefiks + k); if (!v) return null; const o = JSON.parse(v); return o && Date.now() - o.t < TRWALE.wazne ? o : null; } catch (e) { return null; }
+}
+function sprzatnijTrwale() {
+  try {
+    const kl = [];
+    for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(TRWALE.prefiks)) { let t = 0; try { t = JSON.parse(localStorage.getItem(k)).t; } catch (e) { /* uszkodzony */ } kl.push([t, k]); } }
+    kl.sort((a, b) => a[0] - b[0]).slice(0, Math.ceil(kl.length / 2)).forEach(([, k]) => localStorage.removeItem(k));
+  } catch (e) { /* bez pamięci */ }
+}
+function zapiszTrwale(k, w) {
+  let tekst;
+  try { tekst = JSON.stringify({ t: Date.now(), w }); } catch (e) { return; }
+  if (tekst.length > TRWALE.maks) return;
+  try { localStorage.setItem(TRWALE.prefiks + k, tekst); } catch (e) { sprzatnijTrwale(); try { localStorage.setItem(TRWALE.prefiks + k, tekst); } catch (e2) { /* pełna pamięć */ } }
+}
+let zegarOdswiezenia = null;
+/** Przerysowanie bieżącego widoku w tym samym miejscu (po przyjściu świeższych danych). */
+function odswiezWidokWMiejscu() {
+  clearTimeout(zegarOdswiezenia);
+  zegarOdswiezenia = setTimeout(() => {
+    const y = window.scrollY, box = $('#tresc');
+    try { WIDOKI[S.widok](box, S.arg); } catch (e) { bladW(box, e); }
+    setTimeout(() => window.scrollTo(0, y), 400);
+  }, 300);
+}
+// F6: lekkie zapytania wysłane w tej samej chwili (np. kilka sekcji jednej zakładki) idą jednym wywołaniem `pakiet`
+// – jedno uruchomienie skryptu i wspólny odczyt plików zamiast kilku; ciężkie i na żywo zawsze osobno
+const PAKIETOWE = { profilJednostki: 1, zmianyJednostki: 1, naTleRynku: 1, jakoscDanych: 1, wyrozniki: 1, podobneStacje: 1, profilUtworu: 1, najlepszeMiejsca: 1, podobneUtwory: 1 };
+let kolejkaPakietu = [];
+function serwerPakiet(fn, ...args) {
+  return new Promise((ok, zle) => {
+    kolejkaPakietu.push({ fn, args, ok, zle });
+    if (kolejkaPakietu.length === 1) setTimeout(() => {
+      const z = kolejkaPakietu; kolejkaPakietu = [];
+      if (z.length === 1) { serwer(z[0].fn, ...z[0].args).then(z[0].ok, z[0].zle); return; }
+      const t0 = performance.now();
+      google.script.run.withSuccessHandler((wyniki) => {
+        const ms = performance.now() - t0;
+        z.forEach((x, i) => {
+          const w = (wyniki || [])[i];
+          Pomiar.zapisz(x.fn + ' (w pakiecie ' + z.length + ')', ms, !(w && w.blad), w && w.blad);
+          if (w && w.blad) x.zle(new Error(w.blad)); else x.ok(poprawNazwy(w));
+        });
+      }).withFailureHandler((e) => { z.forEach((x) => { Pomiar.zapisz(x.fn + ' (w pakiecie)', performance.now() - t0, false, e && e.message || e); x.zle(e); }); }).pakiet(z.map((x) => [x.fn, x.args]));
+    }, 15);
+  });
+}
+/** Wywołanie z pamięcią: w karcie 10 min; dodatkowo pamięć trwała – zapamiętana odpowiedź od razu, świeża w tle (F2). */
+function serwerP(fn, ...args) {
+  const k = fn + JSON.stringify(args), e = _pamiec.get(k);
+  if (e && Date.now() - e.t < 10 * 60e3) return e.p;
+  const p = PAKIETOWE[fn] ? serwerPakiet(fn, ...args) : serwer(fn, ...args);
+  const trwala = !BEZ_TRWALEJ[fn];
+  p.then((w) => { if (trwala) zapiszTrwale(k, w); }, () => {});
+  const zap = trwala && !e ? czytajTrwale(k) : null;
+  if (zap) {
+    const widok = S.widokId, szybka = Promise.resolve(zap.w);
+    _pamiec.set(k, { t: Date.now(), p: szybka });
+    p.then((w) => {
+      _pamiec.set(k, { t: Date.now(), p: Promise.resolve(w) });
+      if (S.widokId === widok && JSON.stringify(w) !== JSON.stringify(zap.w)) odswiezWidokWMiejscu();
+    }, () => {});
+    return szybka;
+  }
+  _pamiec.set(k, { t: Date.now(), p });
+  p.catch(() => _pamiec.delete(k));
+  return p;
+}
+function toast(tekst, ms = 2600) { const t = el('div', { class: 'toast', role: 'status' }, tekst); document.body.append(t); setTimeout(() => t.remove(), ms); }
+function bladW(box, e) { box.replaceChildren(el('div', { class: 'karta' }, el('p', { class: 'blad' }, 'Błąd: ' + (e && e.message || e)))); }
+const szkielet = (n = 1) => Array.from({ length: n }, () => el('div', { class: 'ladowanie' }));
+
+// ---------------- stan ----------------
+const S = { start: null, jedn: {}, wybrane: [], od: null, do: null, widok: null, arg: null, moje: {} };
+const NAZWY_ZAPASOWE = { jedynka: 'Jedynka (Polskie Radio)', dwojka: 'Dwójka (Polskie Radio)', trojka: 'Trójka (Polskie Radio)', czworka: 'Czwórka (Polskie Radio)',
+  rmf_fm: 'RMF FM', rmf_maxxx: 'RMF MAXX', radio_zet: 'Radio ZET', antyradio: 'Antyradio', chilli_zet: 'Chillizet', meloradio: 'Meloradio', krakow: 'Radio Kraków',
+  eska: 'Radio Eska', eska_rock: 'Eska Rock', vox_fm: 'Vox FM', radio_wawa: 'Eska2 (dawniej Radio Wawa)', lodz: 'Radio Łódź', weekend_fm: 'Weekend FM', mc_radio: 'MC Radio',
+  szczecin: 'Radio Szczecin', bialystok: 'Radio Białystok', radio_poznan: 'Radio Poznań', radio_meteor: 'Radio Meteor', luz: 'Radio LUZ', afera: 'Radio Afera', radio_357: 'Radio 357', nowy_swiat: 'Radio Nowy Świat', rmf24: 'RMF24' };
+/** Czy stacja ma źródło ramówki (lista z serwera: ZRODLA_RAMOWEK w Start.gs). */
+function maRamowke(id) { return ((S.start && S.start.ramowki) || ['jedynka', 'dwojka', 'trojka', 'czworka']).includes(id); }
+function nazwa(id) { return (S.jedn[id] || {}).nazwa || NAZWY_ZAPASOWE[id] || id; }
+function siecStacjiK(id) { for (const j of S.start.jednostki) if ((j.czlonkowie || []).some((c) => c.id === id)) return j.id; return null; }
+
+// ---------------- logotypy ----------------
+function kolorZNazwy(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.charCodeAt(0)) >>> 0; return `hsl(${h % 360} 45% 42%)`; }
+function logo(id, rozmiar = '') {
+  const src = (window.LOGA || {})[id];
+  if (src) return el('img', { class: 'logo ' + rozmiar, src, alt: '', loading: 'lazy' });
+  const n = nazwa(id).replace(/^(Radio|Polskie Radio)\s+/i, '');
+  const inicjaly = n.split(/[\s\/()-]+/).filter(Boolean).slice(0, 2).map((x) => x[0]).join('').toUpperCase() || '?';
+  return el('span', { class: 'logo ' + rozmiar, style: { background: kolorZNazwy(id), borderColor: 'transparent' }, 'aria-hidden': 'true' }, inicjaly);
+}
+
+// ---------------- nawigacja i adresy (W4) ----------------
+const MENU = [['start', 'Start', IK.start], ['ranking', 'Ranking', IK.ranking], ['szukaj', 'Szukaj', IK.szukaj], ['stacje', 'Stacje', IK.stacje], ['epg', 'Ramówki', IK.epg],
+  ['analizy', 'Analizy', IK.analizy], ['biuro', 'Biuro muzyczne', IK.biuro], ['porownaj', 'Porównaj', IK.porownaj], ['playlisty', 'Playlisty', IK.playlisty], ['alerty', 'Alerty i ustawienia', IK.alerty]];
+// dolny pasek na telefonie: 4 pozycje do wyboru w ustawieniach (M6) + „Więcej”
+const DOL_DOMYSLNY = ['start', 'ranking', 'stacje', 'analizy'];
+function pozycjeDolu() {
+  let w = DOL_DOMYSLNY;
+  try { const z = JSON.parse(localStorage.getItem('mb-dol') || 'null'); if (Array.isArray(z) && z.length === 4 && z.every((x) => MENU.some((m) => m[0] === x))) w = z; } catch (e) { /* domyślny */ }
+  return w;
+}
+let DOL = [];
+function ustawDol(lista) {
+  try { if (lista) localStorage.setItem('mb-dol', JSON.stringify(lista)); else localStorage.removeItem('mb-dol'); } catch (e) { /* bez pamięci */ }
+  rysujMenu();
+}
+// motyw: systemowy / jasny / ciemny (W3) – style obu motywów są w Index.html (atrybut data-theme)
+function ustawMotyw(m, zapamietaj) {
+  const r = document.documentElement;
+  if (m === 'jasny') r.setAttribute('data-theme', 'light'); else if (m === 'ciemny') r.setAttribute('data-theme', 'dark'); else r.removeAttribute('data-theme');
+  if (zapamietaj) { try { localStorage.setItem('mb-motyw', m); } catch (e) { /* bez pamięci */ } }
+}
+const motywZapisany = () => { try { return localStorage.getItem('mb-motyw') || 'systemowy'; } catch (e) { return 'systemowy'; } };
+ustawMotyw(motywZapisany());
+const WIDOKI = {};
+function rysujMenu() {
+  DOL = pozycjeDolu().map((w) => MENU.find((m) => m[0] === w)).map(([w, n, ik]) => [w, n.replace(' i ustawienia', ''), ik]).concat([['wiecej', 'Więcej', IK.wiecej]]);
+  $('#nav').replaceChildren(...MENU.map(([w, n, ik]) => el('button', { 'data-w': w, html: svgIkona(ik) + `<span>${n}</span>`, onclick: () => idz(w) })));
+  $('#dol').replaceChildren(...DOL.map(([w, n, ik]) => el('button', { 'data-w': w, html: svgIkona(ik) + `<span>${n}</span>`, onclick: () => (w === 'wiecej' ? menuWiecej() : idz(w)) })));
+  rysujUlubioneMenu();
+}
+function menuWiecej() {
+  otworzArkusz(el('div', {}, el('h2', {}, 'Więcej'), el('div', { style: { display: 'grid', gap: '4px', marginTop: '8px' } },
+    MENU.filter(([w]) => !DOL.some((d) => d[0] === w)).map(([w, n, ik]) => el('button', { class: 'chip', style: { textAlign: 'left', display: 'flex', gap: '8px', alignItems: 'center', padding: '10px 14px' }, html: svgIkona(ik, 'width="18" height="18"') + n, onclick: () => { zamknijArkusz(); idz(w); } })))));
+}
+/** Kolejność stacji w listach: Polskie Radio 1–4 po kolei, potem alfabetycznie. */
+const KOLEJNOSC_STACJI = { jedynka: 1, dwojka: 2, trojka: 3, czworka: 4 };
+function porownajStacje(a, b) { return ((KOLEJNOSC_STACJI[a] || 99) - (KOLEJNOSC_STACJI[b] || 99)) || nazwa(a).localeCompare(nazwa(b), 'pl'); }
+
+/** Ulubione stacje w menu bocznym; „Edytuj” – kolejność (↑ ↓) i usuwanie (✕), zapis na Dysku. */
+let edycjaUlubionych = false;
+function rysujUlubioneMenu() {
+  const ul = (S.moje.ulubioneStacje || []).filter((id) => S.jedn[id] || NAZWY_ZAPASOWE[id]);
+  const przycisk = $('#ulubione-edytuj');
+  if (przycisk) { przycisk.hidden = !ul.length; przycisk.textContent = edycjaUlubionych ? 'Gotowe' : 'Edytuj'; przycisk.onclick = () => { edycjaUlubionych = !edycjaUlubionych; rysujUlubioneMenu(); }; }
+  if (!ul.length) { edycjaUlubionych = false; $('#ulubione-menu').replaceChildren(el('p', { class: 'sub', style: { padding: '0 8px' } }, 'Gwiazdka w profilu stacji dodaje ją tutaj.')); return; }
+  const zapisz = (nowa) => {
+    S.moje.ulubioneStacje = nowa; rysujUlubioneMenu();
+    serwer('zapiszMoje', { kolejnoscUlubionych: nowa }).then((m) => { S.moje = m; }).catch((e) => toast('Nie zapisano: ' + e.message));
+  };
+  const mini = (d, et, f, wyl) => el('button', { class: 'mini', title: et, 'aria-label': et, html: svgIkona(d), onclick: f, disabled: !!wyl });
+  $('#ulubione-menu').replaceChildren(...ul.map((id, i) => edycjaUlubionych
+    ? el('div', { class: 'ulub-w' }, el('button', { onclick: () => idz('stacja', id) }, logo(id, 'm'), el('span', { style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, nazwa(id))),
+      mini('<path d="m6 15 6-6 6 6"/>', 'Wyżej', () => { const n = ul.slice(); [n[i - 1], n[i]] = [n[i], n[i - 1]]; zapisz(n); }, i === 0),
+      mini('<path d="m6 9 6 6 6-6"/>', 'Niżej', () => { const n = ul.slice(); [n[i + 1], n[i]] = [n[i], n[i + 1]]; zapisz(n); }, i === ul.length - 1),
+      mini(IK.zamknij, 'Usuń z ulubionych', () => { zapisz(ul.filter((x) => x !== id)); toast('Usunięto z ulubionych: ' + nazwa(id)); }))
+    : el('button', { onclick: () => idz('stacja', id) }, logo(id, 'm'), nazwa(id))));
+}
+/** Przejście do widoku: aktualizuje adres (google.script.history), żeby można było zapisać link i używać „wstecz”. */
+// pamięć widoków dla „wstecz” (M1): gotowe elementy strony i przewinięcie, najwyżej 12 ostatnich
+const PAM_WIDOKOW = new Map();
+const ODSWIEZAJ_ZAWSZE = { start: 1 };   // widoki z zegarami (kafle „Teraz”) budujemy od nowa, ale wracamy w to samo miejsce
+let licznikWidokow = 0;
+function idz(widok, arg, bezHistorii, stanHistorii) {
+  const lista = $('#podpowiedzi'); if (lista) lista.hidden = true;   // B6: podpowiedzi nie zostają nad nowym widokiem
+  const box = $('#tresc');
+  if (S.widokId && box.childNodes.length) {
+    PAM_WIDOKOW.set(S.widokId, { widok: S.widok, arg: S.arg, y: window.scrollY, wezly: [...box.childNodes] });
+    while (PAM_WIDOKOW.size > 12) PAM_WIDOKOW.delete(PAM_WIDOKOW.keys().next().value);
+  }
+  S.widok = widok; S.arg = arg;
+  document.querySelectorAll('[data-w]').forEach((b) => b.classList.toggle('akt', b.dataset.w === widok || (widok === 'stacja' && b.dataset.w === 'stacje') || (widok === 'utwor' && b.dataset.w === 'szukaj') || (widok === 'wykonawca' && b.dataset.w === 'szukaj')));
+  const par = { w: widok };
+  if (arg !== undefined && arg !== null) par.a = typeof arg === 'string' ? arg : JSON.stringify(arg);
+  if (S.od) { par.od = S.od; par.do = S.do; }
+  if (S.wybrane.length) par.st = S.wybrane.join(',');
+  const id = (stanHistorii && stanHistorii.id) || (++licznikWidokow) + '-' + Date.now();
+  if (!bezHistorii) { try { google.script.history.push({ w: widok, a: arg, id }, par); } catch (e) { /* podgląd bez historii */ } }
+  const zap = stanHistorii && stanHistorii.id ? PAM_WIDOKOW.get(stanHistorii.id) : null;
+  S.widokId = id;
+  if (zap && zap.widok === widok && !ODSWIEZAJ_ZAWSZE[widok]) {
+    box.replaceChildren(...zap.wezly);
+    requestAnimationFrame(() => window.scrollTo(0, zap.y));
+    return;
+  }
+  window.scrollTo(0, 0);
+  box.replaceChildren(...szkielet(2));
+  try { WIDOKI[widok](box, arg); } catch (e) { bladW(box, e); }
+  if (zap) setTimeout(() => window.scrollTo(0, zap.y), 700);
+}
+try { google.script.history.setChangeHandler((e) => { if (e.state && e.state.w) idz(e.state.w, e.state.a, true, e.state); }); } catch (e) { /* podgląd */ }
+function linkDoWidoku() {
+  const par = new URLSearchParams({ w: S.widok });
+  if (S.arg) par.set('a', typeof S.arg === 'string' ? S.arg : JSON.stringify(S.arg));
+  if (S.od) { par.set('od', S.od); par.set('do', S.do); }
+  return (window.ADRES_PANELU || '') + '?' + par.toString();
+}
+
+// ---------------- arkusz (okno dolne) ----------------
+function otworzArkusz(tresc) { $('#arkusz-okno').replaceChildren(tresc); $('#arkusz').hidden = false; }
+function zamknijArkusz() { $('#arkusz').hidden = true; }
+$('#arkusz').addEventListener('click', (e) => { if (e.target.id === 'arkusz') zamknijArkusz(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') zamknijArkusz(); });
+
+// ---------------- filtr: stacje i okres ----------------
+const PRESETY = [['7 dni', 7], ['30 dni', 30], ['90 dni', 90], ['12 mies.', 365], ['Ten rok', 'rok'], ['Wszystko', 'wszystko']];
+function ustawOkres(p) {
+  const kon = S.start.do;
+  if (p === 'wszystko') { S.od = S.start.od; S.do = kon; }
+  else if (p === 'rok') { S.od = kon.slice(0, 4) + '-01-01'; S.do = kon; }
+  else { S.od = dodajDni(kon, -(p - 1)); S.do = kon; }
+  if (S.od < S.start.od) S.od = S.start.od;
+  S.preset = p;
+}
+function opisStacji(lista = S.wybrane) { return !lista.length ? 'Wszystkie stacje' : lista.length === 1 ? nazwa(lista[0]) : lista.length + ' stacje'; }
+/** Pasek filtrów: wybór stacji (okno) + okres. naZmiane – wywoływane po zmianie. */
+function pasekFiltrow(naZmiane, { stacje = true } = {}) {
+  // pełny pasek (komputer) albo jego zawartość w arkuszu od dołu (telefon, M3); zmiana zamyka arkusz i odświeża widok
+  const pelny = (poZmianie) => {
+    const zmiana = () => { poZmianie(); naZmiane(); };
+    const od = el('input', { type: 'date', value: S.od, min: S.start.od, max: S.start.do, 'aria-label': 'Od' });
+    const doo = el('input', { type: 'date', value: S.do, min: S.start.od, max: S.start.do, 'aria-label': 'Do' });
+    od.addEventListener('change', () => { S.od = od.value; S.preset = null; zmiana(); });
+    doo.addEventListener('change', () => { S.do = doo.value; S.preset = null; zmiana(); });
+    return el('div', { class: 'filtry' },
+      stacje ? el('button', { class: 'chip' + (S.wybrane.length ? ' akt' : ''), onclick: () => wyborStacji(S.wybrane, (w) => { S.wybrane = w; zmiana(); }) }, opisStacji()) : null,
+      PRESETY.map(([n, p]) => el('button', { class: 'chip' + (S.preset === p ? ' akt' : ''), onclick: () => { ustawOkres(p); zmiana(); } }, n)),
+      el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '6px' } }, od, '–', doo));
+  };
+  if (!naTelefonie()) return pelny(() => {});
+  const okres = S.preset ? (PRESETY.find((x) => x[1] === S.preset) || ['okres'])[0] : dataPL(S.od, false) + ' – ' + dataPL(S.do, false);
+  return el('div', { class: 'filtry filtry-tel' },
+    el('button', { class: 'chip akt', 'aria-label': 'Zmień filtry', onclick: () => otworzArkusz(el('div', { class: 'arkusz-filtry' }, el('h2', {}, 'Filtry'),
+      el('p', { class: 'sub' }, 'Okres i stacje dla tego widoku. Zmiana od razu odświeża wyniki.'), pelny(() => zamknijArkusz()))) },
+    el('span', { html: svgIkona('<path d="M3 5h18M6 12h12M10 19h4"/>', 'width="16" height="16"'), style: { display: 'inline-flex' } }), okres + (stacje ? ' · ' + opisStacji() : '')));
+}
+// O4: zapisane widoki – nazwany zestaw: widok, argument, stacje i okres; otwierany jednym stuknięciem (Start)
+function przyciskZapiszWidok(widok, arg) {
+  return el('button', { class: 'chip', title: 'Zapisz ten widok (stacje, okres) pod nazwą', onclick: () => {
+    const nazwaW = prompt('Nazwa widoku (np. „Konkurencja Meteoru, 4 tygodnie”):', '');
+    if (!nazwaW) return;
+    const w = (S.moje.widoki || []).concat([{ nazwa: nazwaW, widok, arg: arg == null ? S.arg : arg, wybrane: S.wybrane.slice(), preset: S.preset || null, od: S.od, do: S.do, przypiety: true }]);
+    serwer('zapiszMoje', { widoki: w }).then((m) => { S.moje = m; toast('Zapisano widok „' + nazwaW + '” – jest na Starcie'); }).catch((e) => toast(e.message));
+  } }, '☆ Zapisz widok');
+}
+function otworzWidok(w) {
+  S.wybrane = (w.wybrane || []).filter((id) => S.jedn[id] || id === '_wszystkie');
+  if (w.preset) ustawOkres(w.preset); else if (w.od && w.do) { S.od = w.od; S.do = w.do; S.preset = null; }
+  idz(w.widok, w.arg);
+}
+function kartaZapisanychWidokow() {
+  const l = S.moje.widoki || [];
+  if (!l.length) return null;
+  return karta('Zapisane widoki', 'Stuknij, aby otworzyć z zapisanymi stacjami i okresem.', el('div', { class: 'wiersz' }, l.map((w) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '2px' } },
+    el('button', { class: 'chip', onclick: () => otworzWidok(w) }, w.nazwa),
+    el('button', { class: 'chip', 'aria-label': 'Usuń widok ' + w.nazwa, onclick: () => serwer('zapiszMoje', { widoki: l.filter((x) => x.id !== w.id) }).then((m) => { S.moje = m; idz('start', null, true); }) }, '×')))));
+}
+function wyborStacji(aktualne, gotowe, { max = 99, tytul = 'Wybierz stacje' } = {}) {
+  let wybor = aktualne.slice();
+  const lista = el('div');
+  const szukaj = el('input', { type: 'search', placeholder: 'Szukaj stacji', style: { width: '100%' } });
+  const rysuj = () => {
+    const q = szukaj.value.toLowerCase();
+    lista.replaceChildren(...S.start.jednostki.filter((j) => j.nazwa.toLowerCase().includes(q)).sort((a, b) => porownajStacje(a.id, b.id)).map((j) => {
+      const cb = el('input', { type: 'checkbox', checked: wybor.includes(j.id) });
+      cb.addEventListener('change', () => {
+        if (cb.checked && wybor.length >= max) { cb.checked = false; toast('Najwyżej ' + max + ' stacji.'); return; }
+        wybor = cb.checked ? wybor.concat(j.id) : wybor.filter((x) => x !== j.id);
+      });
+      return el('label', { class: 'op' }, cb, logo(j.id, 'm'), el('span', {}, j.nazwa, j.typ === 'siec' ? el('span', { class: 'znacznik' }, 'sieć') : null));
+    }));
+  };
+  szukaj.addEventListener('input', rysuj);
+  rysuj();
+  otworzArkusz(el('div', { style: { display: 'grid', gap: '10px' } }, el('h2', {}, tytul), szukaj, lista,
+    el('div', { class: 'wiersz', style: { justifyContent: 'flex-end' } },
+      el('button', { class: 'przycisk drugi', onclick: () => { wybor = []; rysuj(); } }, 'Wyczyść'),
+      el('button', { class: 'przycisk', onclick: () => { zamknijArkusz(); gotowe(wybor); } }, 'Zastosuj'))));
+}
+
+// ---------------- komponenty ----------------
+function kafle(lista) {
+  return el('div', { class: 'kafle' }, lista.filter(Boolean).map(([e, w, p]) => el('div', { class: 'kafel' }, el('div', { class: 'e' }, e), el('div', { class: 'w' }, w), el('div', { class: 'p' }, p || ''))));
+}
+function utworKomorka(x) {
+  return el('span', { class: 'utw' }, el('b', {}, x.t), ' ', el('span', { class: 'wyk' }, '· ' + x.a),
+    x.y ? el('span', { class: 'znacznik', title: 'Rok wydania' + (x.z ? ' (' + x.z + ')' : '') }, String(x.y)) : null,
+    x.c === 'PL' ? el('span', { class: 'znacznik', title: 'Polski wykonawca' }, 'PL') : null,
+    znacznikWulg(x.w));
+}
+/** Utwór z wulgaryzmami w tekście (pole w z lrclib.net, scraper/wulgaryzmy.py): 2 – do ocenzurowania, 1 – do rozważenia. */
+function znacznikWulg(w) {
+  if (!w) return null;
+  return el('span', { class: 'znacznik wulg-zn w' + w, title: w === 2 ? 'Wulgaryzmy w tekście – do ocenzurowania przed emisją (wg listy słów, sprawdź tekst)' : 'Słowa do rozważenia w tekście (łagodniejsze albo dwuznaczne)' }, w === 2 ? 'E' : 'e?');
+}
+// ---------------- wulgaryzmy w tekstach (lista: narzedzia/wulgaryzmy.json → Klucze.html) ----------------
+const Wulg = (() => {
+  const d = window.WULGARYZMY || { pl: { przedrostki: [], rdzenie2: [], rdzenie1: [], slowa2: [], slowa1: [] }, en: { rdzenie2: [], slowa2: [], slowa1: [] } };
+  const przed = '(?:' + d.pl.przedrostki.slice().sort((a, b) => b.length - a.length).join('|') + ')';
+  const re = (l, pocz) => (l.length ? new RegExp((pocz ? '^' + przed + '{0,2}' : '') + '(?:' + l.join('|') + ')') : null);
+  const pl2 = re(d.pl.rdzenie2, true), pl1 = re(d.pl.rdzenie1, true), en2 = re(d.en.rdzenie2, false);
+  const s2 = new Set(d.pl.slowa2.concat(d.en.slowa2)), s1 = new Set(d.pl.slowa1.concat(d.en.slowa1));
+  const ascii = (s) => s.toLowerCase().replace(/ł/g, 'l').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/’/g, "'");
+  const poziomSlowa = (slowo) => {
+    const w = ascii(slowo);
+    if (s2.has(w) || (pl2 && pl2.test(w)) || (en2 && en2.test(w))) return 2;
+    if (s1.has(w) || (pl1 && pl1.test(w))) return 1;
+    return 0;
+  };
+  const SLOWO = /\p{L}+(?:[\x27’]\p{L}+)*/gu;
+  /** Tekst → elementy (słowa z poziomem w <span class="wN">) i podsumowanie. */
+  const oznacz = (tekst) => {
+    const czesci = [], licz = { 1: {}, 2: {} }, wiersze = new Set();
+    let poz = 0, m;
+    SLOWO.lastIndex = 0;
+    while ((m = SLOWO.exec(tekst))) {
+      const p = poziomSlowa(m[0]);
+      if (!p) continue;
+      if (m.index > poz) czesci.push(tekst.slice(poz, m.index));
+      czesci.push(el('span', { class: 'wulg w' + p }, m[0]));
+      const kl = ascii(m[0]); licz[p][kl] = (licz[p][kl] || 0) + 1;
+      wiersze.add(tekst.slice(0, m.index).split('\n').length);
+      poz = m.index + m[0].length;
+    }
+    czesci.push(tekst.slice(poz));
+    const suma = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+    return { czesci, w2: suma(licz[2]), w1: suma(licz[1]), slowa2: licz[2], slowa1: licz[1], wierszy: wiersze.size };
+  };
+  return { poziomSlowa, oznacz };
+})();
+function karta(tytul, opis, ...tresc) {
+  // na telefonie długi opis jest skrócony do 2 wierszy; stuknięcie pokazuje całość (W2)
+  return el('section', { class: 'karta' }, tytul ? el('div', { class: 'naglowek-karty' }, el('div', {}, el('h2', {}, tytul), opis ? el('p', { class: 'opis', onclick: (e) => e.currentTarget.classList.toggle('caly') }, opis) : null)) : null, ...tresc);
+}
+/** Tabela z wierszami klikanymi i przyciskiem eksportu (N10). kolumny: [[nagłówek, (x) => komórka, klasa?, (x) => wartość CSV]] */
+const naTelefonie = () => window.matchMedia('(max-width: 760px)').matches;
+/** Domyślna liczba wierszy listy przed „Pokaż wszystkie” (telefon: krócej – mniej przewijania i elementów strony). */
+const LIMIT_LISTY = () => (naTelefonie() ? 25 : 100);
+function tabela(kolumny, wiersze, { klik, nazwaEksportu, pusta = 'Brak danych.', limit } = {}) {
+  if (!wiersze.length) return el('p', { class: 'stan' }, pusta);
+  const ile = Math.min(wiersze.length, limit || LIMIT_LISTY());
+  const wiersz = (x, i) => {
+    const tr = el('tr', { class: klik ? 'klik' : null }, kolumny.map(([, f, kl]) => el('td', { class: kl || null }, f(x, i))));
+    if (klik) tr.addEventListener('click', () => klik(x));
+    return tr;
+  };
+  const tb = el('tbody', {}, wiersze.slice(0, ile).map(wiersz));
+  const t = el('div', { class: 'przewin' }, el('table', { class: 'tabela' }, el('thead', {}, el('tr', {}, kolumny.map(([n, , kl]) => el('th', { class: kl || null }, n)))), tb));
+  const stopka = el('div', { class: 'wiersz stopka-listy' });
+  if (wiersze.length > ile) {
+    // pełna lista: dopisujemy resztę wierszy w miejscu (bez nowego zapytania)
+    stopka.append(el('button', { class: 'przycisk drugi maly', onclick: (e) => { tb.append(...wiersze.slice(ile).map((x, i) => wiersz(x, ile + i))); e.currentTarget.remove(); } }, 'Pokaż wszystkie (' + fmt(wiersze.length) + ')'));
+  }
+  if (nazwaEksportu) stopka.append(el('button', { class: 'przycisk drugi maly', html: svgIkona(IK.eksport) + 'Eksport CSV', onclick: (e) => eksportuj(e.currentTarget, nazwaEksportu, kolumny, wiersze) }));
+  return stopka.children.length ? el('div', {}, t, stopka) : t;
+}
+/** Lista elementów (paski, kafelki) z przyciskiem „Pokaż wszystkie”. */
+function listaRozwijana(elementy, limit, klasa) {
+  const box = el('div', { class: klasa || null }, elementy.slice(0, limit));
+  if (elementy.length <= limit) return box;
+  return el('div', {}, box, el('div', { class: 'wiersz stopka-listy' }, el('button', { class: 'przycisk drugi maly', onclick: (e) => { box.append(...elementy.slice(limit)); e.currentTarget.remove(); } }, 'Pokaż wszystkie (' + fmt(elementy.length) + ')')));
+}
+function eksportuj(btn, nazwaPliku, kolumny, wiersze) {
+  btn.disabled = true;
+  const tekstKom = (k, x, i) => (k[3] ? k[3](x, i) : (() => { const v = k[1](x, i); return v && v.nodeType ? v.textContent : v; })());
+  serwer('eksportCsv', nazwaPliku, kolumny.map((k) => k[0]), wiersze.map((x, i) => kolumny.map((k) => tekstKom(k, x, i))))
+    .then((w) => { btn.disabled = false; btn.replaceWith(el('a', { href: w.url, target: '_blank', rel: 'noopener' }, 'Plik CSV na Dysku')); })
+    .catch((e) => { btn.disabled = false; toast('Eksport: ' + e.message); });
+}
+
+// ---------------- wykresy ----------------
+const KOLORY = ['--s1', '--s2', '--s3', '--s4', '--s5', '--s6'].map((v) => `var(${v})`);
+/** W1: kolor stacji z jej logo (Loga.html, narzedzia/zbuduj_panel.py); null, gdy logo jest czarno-białe. */
+const kolorStacji = (id) => (window.KOLORY_STACJI || {})[id] || null;
+/** Kolory stacji dla serii wykresu – tylko gdy każda seria ma stację z kolorem i barwy są wyraźnie różne; inaczej paleta wykresów. */
+function koloryStacji(ids) {
+  const k = ids.map(kolorStacji);
+  if (k.some((x) => !x)) return null;
+  const rgb = k.map((h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)));
+  for (let i = 0; i < rgb.length; i++) for (let j = i + 1; j < rgb.length; j++) {
+    const [a, b] = [rgb[i], rgb[j]], r = (a[0] + b[0]) / 2;
+    // przybliżona różnica barw postrzegana przez oko („redmean”); poniżej ok. 150 kolory się mylą
+    if (Math.sqrt((2 + r / 256) * (a[0] - b[0]) ** 2 + 4 * (a[1] - b[1]) ** 2 + (2 + (255 - r) / 256) * (a[2] - b[2]) ** 2) < 150) return null;
+  }
+  return k;
+}
+/** W4: jeden sposób pokazywania dymka – mysz i dotyk (pointer), na telefonie dymek zostaje po stuknięciu do następnego stuknięcia. */
+function dymekWykresu(cel, pokaz, ukryj) {
+  cel.addEventListener('pointermove', (ev) => { if (ev.pointerType === 'mouse') pokaz(ev); });
+  cel.addEventListener('pointerdown', (ev) => pokaz(ev));
+  cel.addEventListener('pointerleave', (ev) => { if (ev.pointerType === 'mouse') ukryj(); });
+}
+function skalaOsi(max) {
+  const baza = Math.pow(10, Math.floor(Math.log10(Math.max(max, 1e-9) / 4 || 1)));
+  const krok = [1, 2, 2.5, 5, 10].map((m) => m * baza).find((k) => max / k <= 5) || baza * 10;
+  return { krok, gora: Math.max(krok, Math.ceil(max / krok) * krok) };
+}
+function responsywny(box, rysuj) {
+  rysuj();
+  let w = box.clientWidth;
+  new ResizeObserver(() => { if (box.clientWidth && box.clientWidth !== w) { w = box.clientWidth; rysuj(); } }).observe(box);
+}
+const NS = 'http:\/\/www.w3.org/2000/svg';
+const sv = (t, a) => { const e = document.createElementNS(NS, t); Object.entries(a || {}).forEach(([k, v]) => e.setAttribute(k, v)); return e; };
+/** Słupki jednej serii z dymkiem. */
+function slupki(box, etykiety, wartosci, { wys = 170, minEtykieta = 44, opis = (e, v) => `${e}: <b>${fmt(v)}</b>`, kolor, znaczniki } = {}) {
+  responsywny(box, () => {
+    box.replaceChildren();
+    const szer = Math.max(240, box.clientWidth), L = 38, B = 22, T = znaczniki ? 14 : 6;
+    const { krok, gora } = skalaOsi(Math.max(1, ...wartosci));
+    const y = (v) => T + (wys - T - B) * (1 - v / gora);
+    const svg = sv('svg', { width: szer, height: wys, viewBox: `0 0 ${szer} ${wys}`, role: 'img' });
+    const sg = sv('g', { class: 'siatka-w' }), os = sv('g', { class: 'os' });
+    for (let v = 0; v <= gora + 1e-9; v += krok) {
+      sg.append(sv('line', { x1: L, x2: szer, y1: y(v), y2: y(v) }));
+      const t = sv('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }); t.textContent = fmt(v, 2); os.append(t);
+    }
+    svg.append(sg, os);
+    const pas = (szer - L) / Math.max(1, wartosci.length), bw = Math.max(1.5, Math.min(22, pas - 2)), co = Math.max(1, Math.ceil(minEtykieta / pas));
+    const dymek = el('div', { class: 'dymek' });
+    wartosci.forEach((v, i) => {
+      const g = sv('g'), x = L + i * pas + (pas - bw) / 2, h = Math.max(0, y(0) - y(v)), r = Math.min(4, bw / 2, h);
+      const cel = sv('rect', { x: L + i * pas, y: T, width: pas, height: wys - T - B, fill: 'transparent' });
+      const s = sv('path', { class: 'sl', d: h ? `M${x},${y(0)}V${y(v) + r}Q${x},${y(v)} ${x + r},${y(v)}H${x + bw - r}Q${x + bw},${y(v)} ${x + bw},${y(v) + r}V${y(0)}Z` : '' });
+      if (kolor) s.style.fill = kolor;
+      g.append(cel, s);
+      if (znaczniki && znaczniki[i]) g.append(sv('circle', { cx: x + bw / 2, cy: 6, r: 4, fill: 'var(--s2)' }));
+      dymekWykresu(g, () => { svg.querySelectorAll('g.akt').forEach((x) => x !== g && x.classList.remove('akt')); g.classList.add('akt'); dymek.innerHTML = opis(etykiety[i], v, i); dymek.style.left = Math.min(Math.max(x + bw / 2, 80), szer - 80) + 'px'; dymek.style.top = Math.max(y(v), 30) + 'px'; dymek.style.display = 'block'; },
+        () => { g.classList.remove('akt'); dymek.style.display = 'none'; });
+      svg.append(g);
+      if (i % co === 0) { const t = sv('text', { x: L + i * pas + pas / 2, y: wys - 6, 'text-anchor': 'middle' }); t.textContent = etykiety[i]; os.append(t); }
+    });
+    box.append(svg, dymek);
+  });
+}
+/** Wykres liniowy wielu serii (wspólna oś Y): serie = [{nazwa, wartosci: [..]}]. */
+function linie(box, etykiety, serie, { wys = 200, format = (v) => fmt(v, 1), minY = null, maxY = null, minEtykieta = 56, procenty = false, calkowite = false } = {}) {
+  responsywny(box, () => {
+    box.replaceChildren();
+    const szer = Math.max(240, box.clientWidth), L = 44, B = 22, T = 8, R = 8;
+    const wszystkie = serie.flatMap((s) => s.wartosci).filter((v) => v != null && !isNaN(v));
+    if (!wszystkie.length) { box.append(el('p', { class: 'stan' }, 'Brak danych do wykresu.')); return; }
+    let mn = minY != null ? minY : Math.min(...wszystkie), mx = maxY != null ? maxY : Math.max(...wszystkie);
+    if (mx === mn) { mx += 1; mn -= procenty ? 0 : 1; }
+    const pad = (mx - mn) * 0.08; if (minY == null) mn -= pad; if (maxY == null) mx += pad;
+    const x = (i) => L + (szer - L - R) * (etykiety.length > 1 ? i / (etykiety.length - 1) : 0.5), y = (v) => T + (wys - T - B) * (1 - (v - mn) / (mx - mn));
+    const svg = sv('svg', { width: szer, height: wys, viewBox: `0 0 ${szer} ${wys}`, role: 'img', 'aria-label': serie.map((s) => s.nazwa).join(', ') });
+    const sg = sv('g', { class: 'siatka-w' }), os = sv('g', { class: 'os' });
+    // podziałka: przy osi całkowitej (np. miejsca w rankingu) tylko liczby całkowite, bez powtórzeń
+    const podz = [];
+    if (calkowite) { const krok = Math.max(1, Math.ceil((mx - mn) / 4)); for (let v = Math.ceil(mn); v <= mx + 1e-9; v += krok) podz.push(v); }
+    else for (let k = 0; k <= 4; k++) podz.push(mn + (mx - mn) * k / 4);
+    podz.forEach((v) => { sg.append(sv('line', { x1: L, x2: szer - R, y1: y(v), y2: y(v) })); const t = sv('text', { x: L - 6, y: y(v) + 4, 'text-anchor': 'end' }); t.textContent = format(v); os.append(t); });
+    const co = Math.max(1, Math.ceil(minEtykieta / ((szer - L) / Math.max(1, etykiety.length))));
+    etykiety.forEach((e, i) => { if (i % co === 0) { const t = sv('text', { x: x(i), y: wys - 6, 'text-anchor': 'middle' }); t.textContent = e; os.append(t); } });
+    svg.append(sg, os);
+    const kSt = serie.every((s) => s.jednostka) ? koloryStacji(serie.map((s) => s.jednostka)) : null;
+    if (kSt) serie = serie.map((s, i) => (s.kolor ? s : Object.assign({}, s, { kolor: kSt[i] })));
+    serie.forEach((s, si) => {
+      let d = '';
+      s.wartosci.forEach((v, i) => { if (v == null || isNaN(v)) return; d += (d && s.wartosci[i - 1] != null ? 'L' : 'M') + x(i) + ',' + y(v); });
+      const p = sv('path', { d, class: 'linia', stroke: s.kolor || KOLORY[si % KOLORY.length] }); p.style.stroke = s.kolor || KOLORY[si % KOLORY.length]; p.style.fill = 'none'; p.style.strokeWidth = 2;
+      svg.append(p);
+      (s.punkty || []).forEach((i) => { if (s.wartosci[i] != null) { const c = sv('circle', { cx: x(i), cy: y(s.wartosci[i]), r: 5 }); c.style.fill = 'var(--spadek)'; c.style.stroke = 'var(--karta)'; c.style.strokeWidth = 2; svg.append(c); } });
+    });
+    const kreska = sv('line', { y1: T, y2: wys - B, stroke: 'currentColor', 'stroke-opacity': .25 }); kreska.style.display = 'none'; svg.append(kreska);
+    const dymek = el('div', { class: 'dymek' });
+    dymekWykresu(svg, (ev) => {
+      const r = svg.getBoundingClientRect(), i = Math.round(((ev.clientX - r.left - L) / (szer - L - R)) * (etykiety.length - 1));
+      if (i < 0 || i >= etykiety.length) return;
+      kreska.setAttribute('x1', x(i)); kreska.setAttribute('x2', x(i)); kreska.style.display = '';
+      dymek.innerHTML = `<b>${etykiety[i]}</b><br>` + serie.map((s, si) => `<span style="color:${s.kolor || KOLORY[si % KOLORY.length]}">■</span> ${s.nazwa}: <b>${s.wartosci[i] == null ? '–' : format(s.wartosci[i])}</b>`).join('<br>');
+      dymek.style.left = Math.min(Math.max(x(i), 90), szer - 90) + 'px'; dymek.style.top = '40px'; dymek.style.display = 'block';
+    }, () => { kreska.style.display = 'none'; dymek.style.display = 'none'; });
+    box.append(svg, dymek);
+    if (serie.length > 1) box.append(el('div', { class: 'legenda' }, serie.map((s, si) => el('span', { style: { '--kolor': s.kolor || KOLORY[si % KOLORY.length] } }, s.nazwa))));
+  });
+}
+/** Mapa cieplna dzień tygodnia × godzina: hw = {"tg*24+h": n}. */
+function mapaCieplna(hw, opisWartosci = (v) => fmt(v)) {
+  const max = Math.max(1e-9, ...Object.values(hw || {}));
+  const box = el('div', { class: 'mapa', role: 'img', 'aria-label': 'Dzień tygodnia i godzina' });
+  box.append(el('span'));
+  for (let h = 0; h < 24; h++) box.append(el('span', { class: 'h' }, h % 3 === 0 ? String(h) : ''));
+  for (let d = 0; d < 7; d++) {
+    box.append(el('span', { class: 'e' }, DNI[d]));
+    for (let h = 0; h < 24; h++) {
+      const v = (hw || {})[d * 24 + h] || 0;
+      const k = el('span', { class: 'k', title: `${DNI[d]} ${h}:00–${h}:59: ${opisWartosci(v)}` });
+      if (v) k.append(el('i', { style: { opacity: (0.12 + 0.88 * v / max).toFixed(3) } }));
+      box.append(k);
+    }
+  }
+  // dotknięcie kratki pokazuje jej wartość (na telefonie nie ma podpowiedzi po najechaniu)
+  box.addEventListener('click', (e) => { const k = e.target.closest('.k'); if (k && k.title) toast(k.title, 3000); });
+  return el('div', {}, box, legendaSkali(0, max, opisWartosci));
+}
+/** R2: przycisk odsłuchu 30-s fragmentu (iTunes) w wierszu listy; jeden fragment naraz, ponowne dotknięcie zatrzymuje. */
+let fragmentAudio = null, fragmentPrzycisk = null;
+function przyciskFragmentu(x) {
+  const b = el('button', { class: 'ikona-btn fragment-btn', title: 'Posłuchaj 30 s', 'aria-label': 'Posłuchaj fragmentu: ' + x.a + ' – ' + x.t, html: svgIkona(IK.graj, 'width="14" height="14"') });
+  b.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (fragmentPrzycisk === b && fragmentAudio && !fragmentAudio.paused) { fragmentAudio.pause(); b.innerHTML = svgIkona(IK.graj, 'width="14" height="14"'); return; }
+    if (fragmentAudio) { fragmentAudio.pause(); if (fragmentPrzycisk) fragmentPrzycisk.innerHTML = svgIkona(IK.graj, 'width="14" height="14"'); }
+    b.disabled = true;
+    Odsluch.znajdzFragment({ a: x.a, t: x.t }).then((f) => {
+      b.disabled = false;
+      if (!f || !f.url) { toast('Brak fragmentu tego utworu w iTunes'); return; }
+      fragmentAudio = fragmentAudio || new Audio();
+      fragmentAudio.src = f.url; fragmentAudio.play().catch(() => toast('Nie udało się odtworzyć fragmentu'));
+      fragmentPrzycisk = b; b.innerHTML = svgIkona(IK.pauza, 'width="14" height="14"');
+      fragmentAudio.onended = () => { b.innerHTML = svgIkona(IK.graj, 'width="14" height="14"'); };
+    }).catch(() => { b.disabled = false; toast('Brak fragmentu'); });
+  });
+  return b;
+}
+/** M9: przyklejony pasek skrótów do sekcji (kart) widoku – dotknięcie przewija do karty o danym tytule. */
+function spisSekcji(box, pozycje) {
+  const pasek = el('div', { class: 'zakladki zakladki-profilu', role: 'navigation', 'aria-label': 'Sekcje' },
+    pozycje.map(([n, tytuly]) => el('button', { onclick: () => {
+      const h = [...box.querySelectorAll('section.karta h2')].find((x) => [].concat(tytuly).some((t) => x.textContent.startsWith(t)));
+      if (!h) { toast('Ta sekcja jeszcze się ładuje'); return; }
+      const g = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--wys-gory'), 10) || 56;
+      window.scrollTo({ top: h.closest('section').getBoundingClientRect().top + window.scrollY - g - pasek.offsetHeight - 8, behavior: 'smooth' });
+    } }, n)));
+  return pasek;
+}
+/** Komunikat zamiast pustego wykresu, gdy analiza czeka na metadane (B8). */
+function infoMetadane(box, co) {
+  const p = el('p', { class: 'stan' }, 'Brak danych do wykresu: ta część potrzebuje ' + co + '. Metadane uzupełniają się same (zadania w GitHubie, najczęściej grane utwory najpierw).');
+  box.replaceChildren(p);
+  serwerP('strona').then((s) => { if (s && s.stan && s.stan.metadanych != null) p.append(' Teraz metadane ma ' + fmt(s.stan.metadanych) + ' utworów.'); }).catch(() => {});
+  return box;
+}
+/** Legenda skali koloru: „mniej → więcej” z wartościami skrajnymi (U1). */
+function legendaSkali(min, max, format = (v) => fmt(v), kolor = 'var(--s1)') {
+  return el('div', { class: 'legenda-skali' }, el('span', {}, format(min)),
+    el('span', { class: 'skala' }, [0.12, 0.34, 0.56, 0.78, 1].map((o) => el('i', { style: { background: kolor, opacity: o } }))),
+    el('span', {}, format(max)), el('span', { class: 'sub' }, '· dotknij kratki, by zobaczyć wartość'));
+}
+/** Mini wykres (sparkline) liczb. */
+function iskierka(wartosci, szer = 110, wys = 26) {
+  const svg = sv('svg', { width: szer, height: wys, viewBox: `0 0 ${szer} ${wys}` });
+  const mx = Math.max(1, ...wartosci), n = wartosci.length;
+  const pkt = wartosci.map((v, i) => `${n > 1 ? (i / (n - 1)) * (szer - 2) + 1 : szer / 2},${wys - 2 - (v / mx) * (wys - 4)}`);
+  const p = sv('polyline', { points: pkt.join(' ') }); p.style.fill = 'none'; p.style.stroke = 'var(--s1)'; p.style.strokeWidth = 1.8;
+  svg.append(p);
+  return svg;
+}
+
+// ---------------- wyszukiwarka w nagłówku ----------------
+(function () {
+  const pole = $('#szukaj-glob'), lista = $('#podpowiedzi');
+  let t, ostatnie = [], akt = -1;
+  const pokaz = (pozycje) => {
+    ostatnie = pozycje; akt = -1;
+    lista.replaceChildren(...pozycje.map((p, i) => el('button', { onclick: () => wybierz(i) }, p.ikona, el('span', {}, p.tekst), el('span', { class: 'sub' }, p.sub || ''))));
+    lista.hidden = !pozycje.length;
+  };
+  const wybierz = (i) => { const p = ostatnie[i]; if (!p) return; lista.hidden = true; pole.value = ''; p.akcja(); };
+  pole.addEventListener('input', () => {
+    clearTimeout(t);
+    const q = pole.value.trim();
+    if (q.length < 2) { lista.hidden = true; return; }
+    const ql = q.toLowerCase();
+    const stacje = (S.start ? S.start.jednostki : []).filter((j) => j.nazwa.toLowerCase().includes(ql)).slice(0, 4)
+      .map((j) => ({ ikona: logo(j.id, 'm'), tekst: j.nazwa, sub: 'stacja', akcja: () => idz('stacja', j.id) }));
+    pokaz(stacje);
+    t = setTimeout(() => serwerP('szukaj', q).then((r) => {
+      if (pole.value.trim() !== q) return;
+      pokaz(stacje.concat(r.wyniki.slice(0, 8).map((x) => ({ ikona: el('span', { style: { width: '22px' } }, '♪'), tekst: x.a + ' – ' + x.t, sub: fmt(x.n) + ' emisji', akcja: () => idz('utwor', x.k) })),
+        [{ ikona: el('span', { style: { width: '22px' } }, '⌕'), tekst: 'Wszystkie wyniki dla „' + q + '”', akcja: () => idz('szukaj', q) }]));
+    }).catch(() => {}), 300);
+  });
+  pole.addEventListener('keydown', (e) => {
+    if (lista.hidden) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault(); akt = Math.max(0, Math.min(ostatnie.length - 1, akt + (e.key === 'ArrowDown' ? 1 : -1)));
+      [...lista.children].forEach((b, i) => b.classList.toggle('akt', i === akt));
+    } else if (e.key === 'Enter') { e.preventDefault(); wybierz(akt >= 0 ? akt : ostatnie.length - 1); }
+  });
+  document.addEventListener('click', (e) => { if (!e.target.closest('.szukaj-glob')) lista.hidden = true; });
+})();
+
+// ---------------- moje (ulubione) ----------------
+function przelaczUlubionaStacje(id, btn) {
+  const jest = (S.moje.ulubioneStacje || []).includes(id);
+  serwer('zapiszMoje', { ulubionaStacja: [id, !jest] }).then((m) => { S.moje = m; rysujUlubioneMenu(); if (btn) btn.classList.toggle('akt', !jest); toast(jest ? 'Usunięto z ulubionych' : 'Dodano do ulubionych'); });
+}
+
+/** Nazwy i logotypy wpisane w profilach stacji (stacje_info.json na Dysku) zamiast domyślnych. */
+const _logaDomyslne = {};
+function zastosujInfoStacji() {
+  Object.entries(S.start.infoStacji || {}).forEach(([id, x]) => {
+    if (!(id in _logaDomyslne)) _logaDomyslne[id] = (window.LOGA || {})[id] || null;
+    if (x.logo) window.LOGA[id] = x.logo; else if (_logaDomyslne[id]) window.LOGA[id] = _logaDomyslne[id]; else delete window.LOGA[id];
+    if (S.jedn[id]) { S.jedn[id]._nazwaDomyslna = S.jedn[id]._nazwaDomyslna || S.jedn[id].nazwa; S.jedn[id].nazwa = x.nazwa || S.jedn[id]._nazwaDomyslna; }
+  });
+}
+
+// ---------------- start ----------------
+function uruchom() {
+  rysujMenu();
+  // wysokość przyklejonego nagłówka – zakładki profili przyklejają się tuż pod nim
+  const ustawWysGory = () => { const g = document.querySelector('.gora'); if (g) document.documentElement.style.setProperty('--wys-gory', g.offsetHeight + 'px'); };
+  ustawWysGory(); window.addEventListener('resize', ustawWysGory);
+  // F2: start z pamięci przeglądarki od razu; świeży w tle uzupełnia dane (i odświeża widok, gdy zmienił się zakres)
+  const startZap = czytajTrwale('start[]');
+  const swiezy = serwer('start').then((st) => { zapiszTrwale('start[]', st); return st; });
+  if (startZap) swiezy.then((st) => {
+    S.start = st; S.moje = st.moje || {};
+    st.jednostki.forEach((j) => { S.jedn[j.id] = j; (j.czlonkowie || []).forEach((c) => { S.jedn[c.id] = c; }); });
+    zastosujInfoStacji(); rysujUlubioneMenu();
+    if (st.od) $('#info-danych').textContent = `${st.jednostki.length} stacji · ${dataPL(st.od)} – ${dataPL(st.do)}`;
+    if (st.do !== startZap.w.do || st.jednostki.length !== startZap.w.jednostki.length) { if (S.preset) ustawOkres(S.preset); odswiezWidokWMiejscu(); }
+  }).catch(() => {});
+  (startZap ? Promise.resolve(startZap.w) : swiezy).then((st) => {
+    S.start = st; S.moje = st.moje || {};
+    st.jednostki.forEach((j) => { S.jedn[j.id] = j; (j.czlonkowie || []).forEach((c) => { S.jedn[c.id] = c; }); });
+    zastosujInfoStacji();
+    rysujUlubioneMenu();
+    if (!st.od) { $('#tresc').replaceChildren(karta('Jeszcze brak danych', 'Panel pokaże dane, gdy Odbiornik przyjmie i przeliczy pierwsze porcje.')); return; }
+    $('#info-danych').textContent = `${st.jednostki.length} stacji · ${dataPL(st.od)} – ${dataPL(st.do)}`;
+    const p = window.PARAMETRY || {};
+    ustawOkres(30);
+    if (p.od && p.do) { S.od = p.od; S.do = p.do; S.preset = null; }
+    if (p.st) S.wybrane = p.st.split(',').filter((x) => S.jedn[x]);
+    let arg = p.a;
+    if (arg && /^[[{]/.test(arg)) { try { arg = JSON.parse(arg); } catch (e) { /* zwykły tekst */ } }
+    idz(WIDOKI[p.w] ? p.w : 'start', arg || undefined, true);
+    Pomiar.zapisz('(otwarcie panelu)', performance.now(), true);
+    try { Odtwarzacz.przywroc(); } catch (e) { /* bez odtwarzacza */ }
+  }).catch((e) => bladW($('#tresc'), e));
+}
+</script>

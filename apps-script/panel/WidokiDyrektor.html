@@ -1,0 +1,369 @@
+<script>
+'use strict';
+// ======================= Biuro muzyczne (plan rozwoju D1, D3–D7, D9–D14, O5, AM5, I6) =======================
+// Serwer: Dyrektor.gs. Moja stacja – domyślnie Radio Meteor (playlista z mAirList, D2).
+
+const BIURO = [
+  ['notowanie', 'Notowanie'], ['dodania', 'Dodania'], ['zmeczenie', 'Zmęczenie'], ['spotkanie', 'Spotkanie muzyczne'], ['mojaStacja', 'Moja stacja na tle rynku'],
+  ['analizaRotacji', 'Analiza rotacji'], ['rotacja', 'Plan rotacji'], ['kwota', 'Kwota polska'], ['separacje', 'Separacje'], ['godzina', 'Budowa godziny'], ['sygnaly', 'Wczesne sygnały'],
+  ['eksport', 'Eksport i rozliczenia'], ['poprawki', 'Poprawki dopasowań'], ['ankieta', 'Badanie słuchaczy'],
+];
+const B = { tab: 'notowanie', start: null };
+const nazwaTyg = (pn) => 'tydz. ' + dataPL(pn) + ' – ' + dataPL(dodajDni(pn, 6));
+const komStacji = (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), x.nazwa);
+const blB = (box) => (e) => bladW(box, e);
+
+// AM5: Apple Music jednym stuknięciem – wyszukiwanie w Apple Music i lista „do dodania” (w tej przeglądarce)
+const APPLE_LISTA = 'mb-apple-do-dodania';
+const appleLista = () => { try { return JSON.parse(localStorage.getItem(APPLE_LISTA) || '[]') || []; } catch (e) { return []; } };
+function zapiszAppleListe(l) { try { localStorage.setItem(APPLE_LISTA, JSON.stringify(l.slice(0, 500))); } catch (e) { /* bez pamięci */ } }
+function appleLink(x) { return 'https:\/\/music.apple.com/pl/search?term=' + encodeURIComponent(x.a + ' ' + x.t); }
+function przyciskApple(x) {
+  return el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '2px' } },
+    el('a', { class: 'chip', style: { padding: '2px 8px' }, href: appleLink(x), target: '_blank', rel: 'noopener', title: 'Otwórz w Apple Music', 'aria-label': 'Otwórz w Apple Music', onclick: (e) => e.stopPropagation() }, '♪'),
+    el('button', { class: 'chip', style: { padding: '2px 8px' }, title: 'Do listy „do dodania w Apple Music”', 'aria-label': 'Dodaj do listy Apple Music', onclick: (e) => {
+      e.stopPropagation();
+      const l = appleLista();
+      if (!l.some((y) => y.k === x.k)) { l.unshift({ k: x.k, a: x.a, t: x.t, zrobione: false }); zapiszAppleListe(l); toast('Dodano do listy Apple Music'); } else toast('Już jest na liście');
+    } }, '+'));
+}
+/** Karta listy „do dodania w Apple Music” (Playlisty i Biuro). */
+function kartaAppleListy() {
+  const box = el('div');
+  const rysuj = () => {
+    const l = appleLista();
+    box.replaceChildren(l.length ? el('div', {},
+      el('div', { style: { display: 'grid', gap: '6px' } }, l.map((x) => el('label', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '8px', opacity: x.zrobione ? 0.5 : 1 } },
+        el('input', { type: 'checkbox', checked: x.zrobione, onchange: (e) => { x.zrobione = e.target.checked; zapiszAppleListe(l); rysuj(); } }),
+        el('span', { style: { flex: 1, minWidth: 0 } }, el('b', {}, x.t), ' · ' + x.a),
+        el('a', { class: 'chip', href: appleLink(x), target: '_blank', rel: 'noopener' }, 'Apple Music')))),
+      el('div', { class: 'wiersz', style: { marginTop: '8px' } },
+        el('button', { class: 'przycisk drugi maly', onclick: () => { zapiszAppleListe(l.filter((x) => !x.zrobione)); rysuj(); } }, 'Usuń odhaczone'),
+        el('button', { class: 'przycisk drugi maly', onclick: () => { zapiszAppleListe([]); rysuj(); } }, 'Wyczyść')))
+      : el('p', { class: 'opis' }, 'Pusta. Przycisk „+” przy utworze (Ranking, Biuro muzyczne) dodaje go tutaj; „♪” otwiera wyszukiwanie w Apple Music.'));
+  };
+  rysuj();
+  return karta('Do dodania w Apple Music', 'Lista w tej przeglądarce: stuknij „Apple Music”, dodaj utwór do biblioteki albo playlisty w aplikacji i odhacz.', box);
+}
+
+WIDOKI.biuro = (box, arg) => {
+  if (arg && BIURO.some((x) => x[0] === arg)) B.tab = arg;
+  const tresc = el('div', {}, szkielet(2));
+  const naglowek = el('div', { class: 'naglowek-karty' }, el('h1', {}, 'Biuro muzyczne'));
+  const zakl = el('div', { class: 'zakladki', role: 'tablist', style: { flexWrap: 'nowrap', overflowX: 'auto', maxWidth: '100%' } }, BIURO.map(([id, n]) =>
+    el('button', { role: 'tab', class: B.tab === id ? 'akt' : '', style: { whiteSpace: 'nowrap', flex: 'none' }, onclick: () => idz('biuro', id) }, n)));
+  setTimeout(() => { const a = zakl.querySelector('.akt'); if (a) a.scrollIntoView({ block: 'nearest', inline: 'center' }); }, 0);
+  const wyborStacji = el('select', { 'aria-label': 'Moja stacja' }, S.start.jednostki.map((j) => el('option', { value: j.id }, j.nazwa)));
+  box.replaceChildren(naglowek, el('div', { class: 'wiersz', style: { margin: '4px 0 10px' } }, el('span', { class: 'sub' }, 'Moja stacja:'), wyborStacji, przyciskZapiszWidok('biuro', B.tab)), zakl, tresc);
+  serwerP('biuroStart').then((s) => {
+    B.start = s;
+    wyborStacji.value = s.mojaStacja;
+    wyborStacji.onchange = () => serwer('ustawMojaStacje', wyborStacji.value).then(() => { _pamiec.forEach((v, k) => { if (k.startsWith('biuroStart')) _pamiec.delete(k); }); idz('biuro', B.tab, true); });
+    (BIURO_WIDOKI[B.tab] || BIURO_WIDOKI.notowanie)(tresc, s);
+  }).catch(blB(tresc));
+};
+
+const BIURO_WIDOKI = {};
+
+// ---------------- D4: notowanie (+ I6: odnośniki do list ZPAV) ----------------
+BIURO_WIDOKI.notowanie = (box) => {
+  const rysuj = (pn, ile, wazone) => {
+    box.replaceChildren(...szkielet(1));
+    serwerP('notowanie', pn || null, ile || 100).then((r) => {
+      const wybor = el('select', { 'aria-label': 'Tydzień' }, r.tygodnie.map((t) => el('option', { value: t }, nazwaTyg(t))));
+      wybor.value = r.tydzien;
+      const ileS = el('select', { 'aria-label': 'Liczba pozycji' }, [20, 50, 100, 300].map((n) => el('option', { value: n }, 'Top ' + n)));
+      ileS.value = r.ile;
+      const waga = el('label', { class: 'wiersz' }, el('input', { type: 'checkbox', checked: !!wazone }), ' ważone słuchalnością (Radio Track)');
+      wybor.onchange = () => rysuj(wybor.value, +ileS.value, waga.firstChild.checked);
+      ileS.onchange = wybor.onchange; waga.firstChild.onchange = wybor.onchange;
+      const zm = (x) => (x.poprzednio == null ? el('span', { class: 'zm n' }, 'nowość') : x.poprzednio === x.miejsce ? el('span', { class: 'zm' }, '=') : el('span', { class: 'zm ' + (x.poprzednio > x.miejsce ? 'w' : 's') }, (x.poprzednio > x.miejsce ? '▲ ' : '▼ ') + Math.abs(x.poprzednio - x.miejsce)));
+      const kol = [['#', (x) => x.miejsce, 'num'], ['Ruch', zm, null, (x) => (x.poprzednio == null ? 'nowość' : x.poprzednio - x.miejsce)], ['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t],
+        ['Emisje', (x) => fmt(x.n), 'num', (x) => x.n], ['Przyrost', (x) => (x.nPoprzednio == null ? '–' : el('span', { class: 'zm ' + (x.n >= x.nPoprzednio ? 'w' : 's') }, (x.n >= x.nPoprzednio ? '+' : '') + fmt(x.n - x.nPoprzednio))), 'num', (x) => (x.nPoprzednio == null ? '' : x.n - x.nPoprzednio)],
+        ['Tygodni', (x) => fmt(x.tygodni), 'num tylko-szeroki'], ['Najwyżej', (x) => x.najwyzej + '.', 'num tylko-szeroki', (x) => x.najwyzej], ['', przyciskApple, 'num', () => '']];
+      const tab = el('div');
+      const pokaz = (lista, opis) => tab.replaceChildren(el('p', { class: 'sub', style: { marginBottom: '6px' } }, opis),
+        tabela(kol, lista, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Notowanie ' + r.tydzien, limit: 50 }));
+      pokaz(r.pozycje, `${nazwaTyg(r.tydzien)} · ${fmt(r.utworow)} utworów grało w tym tygodniu. Miejsce wg emisji (remis – to samo miejsce); ruch wobec poprzedniego tygodnia.`);
+      if (wazone) {
+        // wariant ważony: emisje × udział stacji w czasie słuchania (Radio Track) – z „Wskaźników” za ten tydzień
+        serwerP('wskazniki', r.tydzien, dodajDni(r.tydzien, 6)).then((w) => {
+          const udz = {}; Object.entries(window.STACJE_DANE || {}).forEach(([id, d]) => { if (d.rynek && d.rynek.udzial) udz[id] = d.rynek.udzial / 100; });
+          const l = w.top.map((u) => { let z = 0; Object.entries(u.na).forEach(([j, n]) => { if (udz[j]) z += n * udz[j]; }); return { k: u.k, a: u.a, t: u.t, n: Math.round(z * 10) / 10, poprzednio: null, nPoprzednio: null, tygodni: '', najwyzej: '' }; })
+            .filter((u) => u.n > 0).sort((a, b) => b.n - a.n).slice(0, r.ile);
+          l.forEach((x, i) => { x.miejsce = i + 1; });
+          pokaz(l, 'Wariant ważony: emisje na każdej stacji × udział stacji w czasie słuchania (Radio Track). Bliżej listy OLiA, która też liczy słuchaczy, a nie emisje. 300 najczęściej granych utworów tygodnia.');
+        }).catch(blB(tab));
+      }
+      box.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, wybor, ileS, waga),
+        karta('Notowanie airplay – całe radio', null, tab),
+        karta('Oficjalne listy ZPAV (I6)', 'OLiA (airplay ważony słuchalnością) i OLiS (sprzedaż i streaming) publikuje ZPAV. Porównaj ręcznie z naszym notowaniem – nie pobieramy ich automatycznie.',
+          el('div', { class: 'wiersz' }, el('a', { class: 'chip', href: 'https:\/\/olis.pl/', target: '_blank', rel: 'noopener' }, 'olis.pl – listy OLiS i OLiA'),
+            el('a', { class: 'chip', href: 'https:\/\/en.wikipedia.org/wiki/Polish_music_charts', target: '_blank', rel: 'noopener' }, 'Opis list (Wikipedia)'))));
+    }).catch(blB(box));
+  };
+  rysuj();
+};
+
+// ---------------- D3: dodania tygodnia ----------------
+BIURO_WIDOKI.dodania = (box) => {
+  const rysuj = (pn) => serwerP('dodaniaTygodnia', pn || null).then((r) => {
+    const wybor = el('select', { 'aria-label': 'Tydzień' }, r.tygodnie.map((t) => el('option', { value: t }, nazwaTyg(t))));
+    wybor.value = r.tydzien; wybor.onchange = () => rysuj(wybor.value);
+    box.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, wybor),
+      karta('Najczęściej dodawane („Most Added”)', `${nazwaTyg(r.tydzien)}: ${fmt(r.dodan)} utworów zagranych pierwszy raz na co najmniej jednej stacji. Kolejność: ile stacji dodało utwór w tym tygodniu.`,
+        tabela([['#', (x, i) => i + 1, 'num'], ['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Stacji', (x) => fmt(x.stacji), 'num', (x) => x.stacji],
+          ['Pierwsza', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '6px' } }, logo(x.kto[0].id, 'm'), el('span', { class: 'sub' }, dataPL(x.kto[0].d, false))), null, (x) => x.kto[0].nazwa],
+          ['Kto dodał', (x) => el('span', { class: 'sub' }, x.kto.map((p) => p.nazwa + ' ' + dataPL(p.d, false)).join(', ')), 'tylko-szeroki', (x) => x.kto.map((p) => p.nazwa + ' ' + p.d).join('; ')],
+          ['', przyciskApple, 'num', () => '']], r.u, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Dodania ' + r.tydzien, limit: 30 })),
+      karta('Ile dodała każda stacja', 'Liczba utworów zagranych pierwszy raz w tym tygodniu (pierwsze 4 tygodnie danych stacji pomijamy).',
+        tabela([['Stacja', komStacji, null, (x) => x.nazwa], ['Dodań', (x) => fmt(x.n), 'num', (x) => x.n]], r.stacje, { klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Dodania stacji ' + r.tydzien, limit: 15 })));
+  }).catch(blB(box));
+  rysuj();
+};
+
+// ---------------- D7: zmęczenie ----------------
+BIURO_WIDOKI.zmeczenie = (box) => serwerP('zmeczenieRynku').then((r) => {
+  const l = r.u.slice().sort((a, b) => (a.odSzczytu == null) - (b.odSzczytu == null) || a.odSzczytu - b.odSzczytu);
+  box.replaceChildren(karta('Zmęczenie utworem na rynku', `300 najczęściej granych w tygodniu od ${dataPL(r.tydzien)}. „Od szczytu” = emisje teraz wobec najlepszego tygodnia (26 tygodni); „Wcześni gracze” = ostatni pełny miesiąc wobec najlepszego miesiąca u 3 stacji, które zagrały utwór najwcześniej. To sygnał do decyzji, nie badanie słuchaczy.`,
+    tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisje', (x) => fmt(x.n), 'num', (x) => x.n], ['Od szczytu', (x) => (x.odSzczytu == null ? '–' : proc(x.odSzczytu)), 'num', (x) => x.odSzczytu],
+      ['Trend 4 tyg.', (x) => (x.trend4 == null ? '–' : el('span', { class: 'zm ' + (x.trend4 >= 0 ? 'w' : 's') }, (x.trend4 >= 0 ? '+' : '') + proc(x.trend4))), 'num', (x) => x.trend4],
+      ['Tygodni', (x) => fmt(x.tygodni), 'num tylko-szeroki'], ['Wcześni gracze', (x) => (x.wczesniSpadek == null ? '–' : proc(x.wczesniSpadek)), 'num tylko-szeroki', (x) => x.wczesniSpadek],
+      ['26 tyg.', (x) => iskierka(x.seria.map((v) => Math.max(0, v)), 80, 20), 'tylko-szeroki', () => '']], l, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Zmęczenie ' + r.tydzien, limit: 40 })));
+}).catch(blB(box));
+
+// ---------------- D5: spotkanie muzyczne ----------------
+BIURO_WIDOKI.spotkanie = (box, s) => serwerP('kandydaciSpotkania', s.mojaStacja).then((r) => {
+  const decyduj = (x, stan, wiersz) => {
+    const notatka = stan === 'usun' ? '' : (prompt('Notatka (opcjonalnie):', (x.decyzja && x.decyzja.notatka) || '') || '');
+    serwer('zapiszDecyzje', x.k, stan, notatka, { a: x.a, t: x.t }).then(() => { toast(stan === 'dodaj' ? 'Dodaj – zapisane' : stan === 'odrzuc' ? 'Odrzucone' : 'Wróci za tydzień'); wiersz.remove(); _pamiec.forEach((v, k) => { if (k.startsWith('kandydaciSpotkania')) _pamiec.delete(k); }); })
+      .catch((e) => toast(e.message));
+  };
+  const karty = r.kandydaci.map((x) => {
+    const w = el('div', { class: 'karta', style: { padding: '12px' } },
+      el('div', { class: 'wiersz', style: { justifyContent: 'space-between' } }, utworKomorka(x), przyciskFragmentu(x)),
+      el('p', { class: 'sub', style: { margin: '6px 0' } }, [x.powody.join(' · '), x.l ? 'czas ' + Math.floor(x.l / 60) + ':' + String(Math.round(x.l % 60)).padStart(2, '0') : null, x.bpm ? Math.round(x.bpm) + ' BPM' : null, x.y ? 'rok ' + x.y : null, fmt(x.n) + ' emisji w bazie'].filter(Boolean).join(' · ')),
+      x.stacje.length ? el('p', { class: 'sub' }, 'Grają: ' + x.stacje.slice(0, 8).map((p) => p.nazwa + ' (od ' + dataPL(p.od, false) + ')').join(', ') + (x.stacje.length > 8 ? '…' : '')) : null,
+      el('div', { class: 'wiersz', style: { marginTop: '8px' } }));
+    w.lastChild.append(el('button', { class: 'przycisk maly', onclick: () => decyduj(x, 'dodaj', w) }, 'Dodaj'), el('button', { class: 'przycisk drugi maly', onclick: () => decyduj(x, 'odrzuc', w) }, 'Odrzuć'),
+      el('button', { class: 'przycisk drugi maly', onclick: () => decyduj(x, 'wroc', w) }, 'Wróć za tydzień'), el('button', { class: 'przycisk drugi maly', onclick: () => idz('utwor', x.k) }, 'Profil'), przyciskApple(x));
+    return w;
+  });
+  box.replaceChildren(karta('Kandydaci do dodania – ' + r.nazwa, `Utwory, których stacja jeszcze nie grała: debiuty na ≥ 3 stacjach (30 dni), polskie nowości (90 dni), utwory rosnące na stacjach o podobnym formacie (${r.podobne.join(', ') || 'brak danych'}). Decyzje „Dodaj” i „Odrzuć” chowają utwór; „Wróć za tydzień” – na 7 dni.`,
+    karty.length ? el('div', { style: { display: 'grid', gap: '8px' } }, karty) : el('p', { class: 'opis' }, 'Brak kandydatów.')),
+  karta('Historia decyzji', null, tabela([['Kiedy', (x) => new Date(x.kiedy).toLocaleDateString('pl-PL'), 'num'], ['Utwór', (x) => (x.a || '') + ' – ' + (x.t || x.k)], ['Decyzja', (x) => ({ dodaj: 'dodaj', odrzuc: 'odrzuć', wroc: 'wróć', usun: 'cofnięta' })[x.stan] || x.stan], ['Notatka', (x) => x.notatka || '', 'tylko-szeroki']],
+    r.historia, { nazwaEksportu: 'Decyzje spotkań', limit: 20, pusta: 'Jeszcze nie ma decyzji.' })), kartaAppleListy());
+}).catch(blB(box));
+
+// ---------------- D1: moja stacja na tle rynku ----------------
+BIURO_WIDOKI.mojaStacja = (box, s) => {
+  const rysuj = () => serwerP('mojaStacjaNaTle', s.mojaStacja, S.od, S.do).then((r) => {
+    box.replaceChildren(pasekFiltrow(rysuj, { stacje: false }),
+      kafle([['Udział polskich', proc(r.udzialPL), 'rynek: ' + proc(r.udzialPLrynek)], ['Nowości u nas', r.nowosciMediana == null ? '–' : fmt(r.nowosciMediana) + ' dni', 'mediana od pierwszej emisji w bazie; rynek: ' + (r.nowosciRynekMediana == null ? '–' : fmt(r.nowosciRynekMediana) + ' dni')],
+        ['Miejsce w szybkości', r.nowosciMiejsce ? r.nowosciMiejsce + ' z ' + r.nowosciStacji : '–', 'wśród stacji z ≥ 10 debiutami'], ['Rotacja top 20', proc(r.rotacjaTop20), fmt(r.utworow) + ' utworów, ' + fmt(r.emisji) + ' emisji']]),
+      karta('Luki: grane szeroko, u nas nie', `${dataPL(r.od)} – ${dataPL(r.do)} · utwory grane na ≥ 5 innych stacjach, których ${r.nazwa} nie zagrało.`,
+        tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisji na rynku', (x) => fmt(x.n), 'num', (x) => x.n], ['Stacji', (x) => fmt(x.stacji), 'num'], ['', przyciskApple, 'num', () => '']], r.luki, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Luki ' + r.nazwa, limit: 25 })),
+      karta('Grane tylko u nas', 'Utwory, których w tym okresie nie zagrała żadna inna stacja w bazie.',
+        tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisji', (x) => fmt(x.n), 'num', (x) => x.n]], r.tylkoU, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Tylko u nas ' + r.nazwa, limit: 25 })));
+  }).catch(blB(box));
+  rysuj();
+};
+
+// ---------------- D6: plan rotacji ----------------
+BIURO_WIDOKI.rotacja = (box, s) => serwerP('kontrolaRotacji', s.mojaStacja).then((r) => {
+  const plan = s.rotacja;
+  const zapisz = () => serwer('zapiszPlanRotacji', s.mojaStacja, plan).then(() => { toast('Zapisano plan'); _pamiec.clear(); idz('biuro', 'rotacja', true); }).catch((e) => toast(e.message));
+  const katSel = (x) => {
+    const sel = el('select', { 'aria-label': 'Kategoria', onclick: (e) => e.stopPropagation() }, [el('option', { value: '' }, '–')].concat(plan.kategorie.map((k) => el('option', { value: k.id }, k.nazwa))));
+    sel.value = plan.utwory[x.k] || '';
+    sel.onchange = () => { if (sel.value) plan.utwory[x.k] = sel.value; else delete plan.utwory[x.k]; zapisz(); };
+    return sel;
+  };
+  const kategorie = el('div', { style: { display: 'grid', gap: '6px' } }, plan.kategorie.map((k) => el('div', { class: 'wiersz', style: { gap: '6px' } },
+    el('input', { value: k.nazwa, style: { width: '120px' }, 'aria-label': 'Nazwa kategorii', onchange: (e) => { k.nazwa = e.target.value; } }),
+    el('span', { class: 'sub' }, 'emisji/tydz.'), el('input', { type: 'number', value: k.cel, style: { width: '64px' }, onchange: (e) => { k.cel = +e.target.value; } }),
+    el('span', { class: 'sub' }, 'min. odstęp (h)'), el('input', { type: 'number', value: k.odstepH, style: { width: '64px' }, onchange: (e) => { k.odstepH = +e.target.value; } }))));
+  box.replaceChildren(
+    karta('Kategorie ' + r.nazwa, 'Własne kategorie i cele. Kategorię utworu ustawisz w tabelach niżej.', kategorie, el('button', { class: 'przycisk maly', style: { marginTop: '8px' }, onclick: zapisz }, 'Zapisz kategorie')),
+    karta('Plan wobec ostatnich 7 dni', `${dataPL(r.od)} – ${dataPL(r.do)}: emisje wobec celu, najkrótszy odstęp, podpowiedzi (do recurrent, rynek zmęczony).`,
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Kategoria', katSel, null, (x) => x.kat], ['Emisji', (x) => fmt(x.emisji) + (x.cel ? ' / ' + x.cel : ''), 'num', (x) => x.emisji],
+        ['Odstęp min.', (x) => (x.odstepMinH == null ? '–' : fmt(x.odstepMinH, 1) + ' h'), 'num tylko-szeroki', (x) => x.odstepMinH], ['Uwagi', (x) => el('span', { class: x.uwagi.length ? 'blad' : 'sub' }, x.uwagi.join('; ') || 'OK'), null, (x) => x.uwagi.join('; ')]],
+      r.wiersze, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Plan rotacji ' + r.nazwa, pusta: 'Brak utworów w planie – przypisz kategorie w tabeli niżej.' })),
+    karta('Grane, ale bez kategorii', '≥ 5 emisji w ostatnim tygodniu.', tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisji', (x) => fmt(x.emisji), 'num'], ['Kategoria', katSel]], r.bezKategorii, { limit: 20 })));
+}).catch(blB(box));
+
+// ---------------- Analiza rotacji: propozycje przeniesień między kategoriami ----------------
+const KAT_KLASA = { power: 'k-power', current: 'k-current', nowosc: 'k-nowosc', recurrent: 'k-recurrent', gold: 'k-gold', zdjac: 'k-zdjac' };
+function znakKat(id, nazwy) { return el('span', { class: 'kat-znak ' + (KAT_KLASA[id] || '') }, (nazwy && nazwy[id]) || id); }
+function slupki6(w) {
+  const max = Math.max(1, ...w);
+  return el('span', { class: 'mini-slupki', title: 'Emisje u nas w 6 ostatnich pełnych tygodniach: ' + w.join(', ') }, w.map((n) => el('i', { style: { height: Math.max(2, Math.round(22 * n / max)) + 'px' } })));
+}
+BIURO_WIDOKI.analizaRotacji = (box, s) => serwerP('analizaRotacji', s.mojaStacja).then((r) => {
+  const plan = s.rotacja;
+  const NOWA_KAT = { nowosc: { id: 'nowosc', nazwa: 'Nowość', cel: 6, odstepH: 8 } };
+  const przenies = (lista) => {
+    lista.forEach((x) => {
+      if (x.propozycja === 'zdjac') delete plan.utwory[x.k];
+      else {
+        if (!plan.kategorie.some((c) => c.id === x.propozycja) && NOWA_KAT[x.propozycja]) plan.kategorie.push(NOWA_KAT[x.propozycja]);
+        plan.utwory[x.k] = x.propozycja;
+      }
+    });
+    return serwer('zapiszPlanRotacji', s.mojaStacja, plan).then(() => { toast(lista.length === 1 ? 'Zapisano w planie rotacji' : `Zapisano ${lista.length} zmian w planie rotacji`); _pamiec.clear(); idz('biuro', 'analizaRotacji', true); }).catch((e) => toast(e.message));
+  };
+  const zmiana = (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '6px' } }, x.kat ? znakKat(x.kat, r.nazwyKat) : el('span', { class: 'sub' }, 'brak'), el('span', { class: 'sub', 'aria-hidden': 'true' }, '→'), znakKat(x.propozycja, r.nazwyKat));
+  const rynekK = (x) => (x.rynek ? el('span', {}, el('b', {}, x.rynek.miejsce + '.'), el('span', { class: 'sub' }, ' ' + proc(x.rynek.odSzczytu) + ' szczytu')) : el('span', { class: 'sub' }, 'poza 300'));
+  const przycisk = (x) => el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); przenies([x]); } }, x.propozycja === 'zdjac' ? 'Zdejmij' : 'Przenieś');
+  const kolProp = [['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Zmiana', zmiana, null, (x) => (x.kat || '') + ' → ' + x.propozycja],
+    ['Dlaczego', (x) => el('div', { class: 'powody' }, x.powody.map((p) => el('div', {}, p))), null, (x) => x.powody.join('; ')],
+    ['U nas', (x) => (x.tygodnie ? slupki6(x.tygodnie) : '–'), 'num tylko-szeroki', (x) => (x.tygodnie || []).join(' ')], ['Rynek', rynekK, 'num', (x) => (x.rynek ? x.rynek.miejsce : '')], ['', przycisk, 'num']];
+  const liczniki = Object.entries(r.kategorieStacji).map(([k, n]) => el('span', { class: 'wiersz', style: { gap: '6px', flexWrap: 'nowrap' } }, znakKat(k, r.nazwyKat), el('b', {}, fmt(n))));
+  box.replaceChildren(
+    karta('Analiza rotacji – ' + r.nazwa, `Tygodnie ${dataPL(r.tygodnie[0])} – ${dataPL(dodajDni(r.tygodnie[5], 6))}; rynek: notowanie całego radia z tygodnia od ${r.rynekTydzien ? dataPL(r.rynekTydzien) : '–'}. ` +
+      (r.planUstawiony ? `Kategorie z Twojego planu rotacji (${fmt(r.planUstawiony)} utworów); pozostałe utwory – kategoria wyliczona z liczby emisji.` : 'Plan rotacji jest pusty – kategorie wyliczone z liczby emisji (cele z zakładki Plan rotacji). „Przenieś” zapisuje utwór w planie.'),
+      el('div', { class: 'wiersz', style: { gap: '14px' } }, liczniki)),
+    karta(`Propozycje przeniesień (${fmt(r.propozycje.length)})`, 'Heurystyka Music Base: Power → Current, gdy rynek zmęczony; Current → Power, gdy utwór jest w top ' + r.reguly.topPower + ' notowania i rośnie; Current → Recurrent po szczycie; Nowość → Current, gdy przyjął się na rynku; stare utwory → Gold. Decyzja zawsze należy do Ciebie.',
+      r.propozycje.length ? el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, el('button', { class: 'przycisk maly', onclick: () => { if (confirm(`Zapisać w planie wszystkie ${r.propozycje.length} propozycje?`)) przenies(r.propozycje); } }, 'Przenieś wszystkie')) : null,
+      el('div', { class: 'tab-karty' }, tabela(kolProp, r.propozycje, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Propozycje rotacji ' + r.nazwa, pusta: 'Brak propozycji – rotacja zgadza się z sygnałami rynku.' }))),
+    karta('Warto dodać', 'Rosną w notowaniu całego radia (pierwsza 60, trend 4 tygodni > ' + Math.round(r.reguly.wzrost * 100) + '%), a u nas nie zagrały ani razu w 6 tygodni.',
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Dlaczego', (x) => el('div', { class: 'powody' }, x.powody.join('; ')), null, (x) => x.powody.join('; ')], ['Rynek', rynekK, 'num'], ['', (x) => el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); przenies([x]); } }, 'Dodaj jako nowość'), 'num']],
+        r.doDodania, { klik: (x) => idz('utwor', x.k), pusta: 'Nic nowego nie rośnie poza Twoją playlistą.' })),
+    karta('Bez zmian', 'Utwory grane u nas (≥ 2 emisje w 6 tygodni) albo zapisane w planie, dla których sygnały nie wskazują zmiany.',
+      tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Kategoria', (x) => znakKat(x.kat, r.nazwyKat), null, (x) => x.kat], ['U nas', (x) => slupki6(x.tygodnie), 'num tylko-szeroki'], ['Na tydz.', (x) => fmt(x.naTydz, 1), 'num', (x) => x.naTydz], ['Rynek', rynekK, 'num', (x) => (x.rynek ? x.rynek.miejsce : '')]],
+        r.bezZmian, { klik: (x) => idz('utwor', x.k), limit: 25, nazwaEksportu: 'Rotacja bez zmian ' + r.nazwa })));
+}).catch(blB(box));
+
+// ---------------- D9: kwota polska ----------------
+BIURO_WIDOKI.kwota = (box, s) => {
+  const rysuj = (mies) => serwerP('kwotaMiesiaca', s.mojaStacja, mies || null).then((r) => {
+    const w = r.wynik, wybor = el('input', { type: 'month', value: r.miesiac, 'aria-label': 'Miesiąc', onchange: (e) => rysuj(e.target.value) });
+    const ok = (v, prog) => (v == null ? '–' : el('span', { class: 'zm ' + (v >= prog ? 'w' : 's') }, proc(v)));
+    box.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, wybor),
+      kafle([['Po polsku', ok(w.udzialPL, r.progi.pl), 'próg 33% czasu utworów słowno-muzycznych'], ['Z tego w 5–24', ok(w.udzialDzien, r.progi.dzien), 'próg 60%; debiutant liczony 200%'],
+        ['Pokrycie', proc(w.pokrycie), 'emisje ze znanym czasem i językiem'], ['Dni z danymi', fmt(w.dni) + ' / ' + w.dniMiesiaca, 'prognoza: ten sam udział do końca miesiąca']]),
+      karta('Utwory po polsku', 'Szacunek wg ustawy o radiofonii i telewizji (art. 15 ust. 2–2b). Debiutant – przybliżenie z pierwszych emisji w bazie (od 2022); popraw oznaczenie, gdy znasz wykonawcę. Czas: mAirList albo MusicBrainz; język: lrclib.net.',
+        tabela([['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t], ['Emisji', (x) => fmt(x.n), 'num'], ['W 5–24', (x) => fmt(x.wDzien), 'num tylko-szeroki'], ['Czas', (x) => fmt(x.l * x.n / 60) + ' min', 'num', (x) => x.l * x.n],
+          ['Debiutant', (x) => el('select', { onclick: (e) => e.stopPropagation(), onchange: (e) => serwer('ustawDebiutanta', x.k.split('|')[0], e.target.value === '' ? null : e.target.value === '1').then(() => { _pamiec.clear(); rysuj(r.miesiac); }) },
+            el('option', { value: '', selected: !x.debiutantRecznie }, x.debiutant ? 'tak (auto)' : 'nie (auto)'), el('option', { value: '1', selected: x.debiutantRecznie && x.debiutant }, 'tak'), el('option', { value: '0', selected: x.debiutantRecznie && !x.debiutant }, 'nie')), null, (x) => (x.debiutant ? 'tak' : 'nie')]],
+        w.utwory, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Kwota polska ' + r.nazwa + ' ' + r.miesiac, limit: 40 })));
+  }).catch(blB(box));
+  rysuj();
+};
+
+// ---------------- D10: separacje ----------------
+BIURO_WIDOKI.separacje = (box, s) => {
+  const R = { wykonawcaMin: 60, utworNaDobe: 3, utworOdstepH: 3, skokBpm: 35 };
+  const rysuj = (dzien) => serwerP('kontrolaSeparacji', s.mojaStacja, dzien || null, R).then((r) => {
+    const pole = (k, opis) => el('label', { class: 'wiersz', style: { gap: '4px' } }, el('span', { class: 'sub' }, opis), el('input', { type: 'number', value: R[k], style: { width: '64px' }, onchange: (e) => { R[k] = +e.target.value; rysuj(r.dzien); } }));
+    box.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px', gap: '10px' } }, el('input', { type: 'date', value: r.dzien, onchange: (e) => rysuj(e.target.value) }),
+      pole('wykonawcaMin', 'wykonawca co min.'), pole('utworNaDobe', 'utwór najwyżej ×/dobę'), pole('utworOdstepH', 'utwór co h'), pole('skokBpm', 'skok tempa BPM')),
+      karta('Naruszenia ' + dataPL(r.dzien), `${r.nazwa}: ${fmt(r.emisji)} emisji. Reguły jak w programach do planowania emisji: separacja wykonawcy i tytułu, liczba emisji, skoki tempa (BPM z Deezera).`,
+        tabela([['Godz.', (x) => x.g, 'num'], ['Reguła', (x) => x.typ], ['Opis', (x) => x.opis]], r.naruszenia, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Separacje ' + r.dzien, pusta: 'Bez naruszeń.' })),
+      karta('Godzina po godzinie', 'Udział polskich (znany język) i minuty muzyki w godzinie (z długości utworów).',
+        tabela([['Godzina', (x) => String(x.h).padStart(2, '0') + ':00', 'num'], ['Utworów', (x) => fmt(x.utworow), 'num'], ['Po polsku', (x) => proc(x.udzialPL), 'num'], ['Min. muzyki', (x) => fmt(x.minutMuzyki), 'num']], r.godziny, { nazwaEksportu: 'Godziny ' + r.dzien })));
+  }).catch(blB(box));
+  rysuj();
+};
+
+// ---------------- D13: budowa godziny ----------------
+BIURO_WIDOKI.godzina = (box, s) => {
+  let j = s.mojaStacja;
+  const rysuj = () => serwerP('budowaGodziny', j, S.od, S.do).then((r) => {
+    const sel = el('select', { 'aria-label': 'Stacja' }, S.start.jednostki.map((x) => el('option', { value: x.id }, x.nazwa)));
+    sel.value = j; sel.onchange = () => { j = sel.value; rysuj(); };
+    const K = ['power', 'current', 'recurrent', 'gold', 'sporadyczne'];
+    box.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, sel), pasekFiltrow(rysuj, { stacje: false }),
+      karta('Jak ' + r.nazwa + ' buduje godzinę', 'Pory dnia osobno dla dni roboczych i weekendu: kategorie rotacji, udział polskich (język tekstu), średni rok, tempo, minuty muzyki na godzinę.',
+        tabela([['Dni', (x) => (x.typ === 'rob' ? 'pon.–pt.' : 'sob.–niedz.')], ['Pora', (x) => x.pora], ['Utw./h', (x) => fmt(x.naGodzine, 1), 'num'], ['Min. muzyki/h', (x) => fmt(x.minutMuzyki), 'num']]
+          .concat(K.map((k) => [k, (x) => proc(x.kategorie[k] || 0), 'num tylko-szeroki']))
+          .concat([['Po polsku', (x) => proc(x.udzialPL), 'num'], ['Śr. rok', (x) => fmt(x.sredniRok), 'num tylko-szeroki'], ['Śr. BPM', (x) => fmt(x.sredniBpm), 'num tylko-szeroki']]),
+        r.komorki.sort((a, b) => (a.typ < b.typ ? -1 : a.typ > b.typ ? 1 : r.pory.indexOf(a.pora) - r.pory.indexOf(b.pora))), { nazwaEksportu: 'Budowa godziny ' + r.nazwa })));
+  }).catch(blB(box));
+  rysuj();
+};
+
+// ---------------- D14: wczesne sygnały ----------------
+BIURO_WIDOKI.sygnaly = (box) => serwerP('wczesneSygnaly').then((r) => {
+  const kol = (extra) => [['Utwór', utworKomorka, null, (x) => x.a + ' – ' + x.t]].concat(extra, [['Radio 30 dni', (x) => fmt(x.radio30), 'num', (x) => x.radio30], ['', przyciskApple, 'num', () => '']]);
+  box.replaceChildren(
+    karta('Apple Music Top Polska' + (r.appleDzien ? ' – ' + dataPL(r.appleDzien) : ''), 'Lista Apple (RSS Apple Marketing Tools) wobec emisji w radiu w ostatnich 30 dniach. Utwory wysoko w Apple, a rzadko w radiu, to kandydaci.',
+      tabela(kol([['Apple', (x) => x.poz + '.', 'num', (x) => x.poz], ['Tydzień temu', (x) => (x.pozTydzien ? x.pozTydzien + '.' : '–'), 'num tylko-szeroki']]), r.apple, { klik: (x) => idz('utwor', x.k), nazwaEksportu: 'Apple Top PL', limit: 25, pusta: 'Lista pojawi się po pierwszym zadaniu „Zrodla zewnetrzne” (raz na dobę).' })),
+    karta('Popularne w Deezerze, rzadko w radiu', 'Debiuty z 180 dni: ranking popularności Deezera wobec emisji w radiu.',
+      tabela(kol([['Deezer', (x) => fmt(x.dzr), 'num', (x) => x.dzr]]), r.deezer, { klik: (x) => idz('utwor', x.k), limit: 20, nazwaEksportu: 'Deezer sygnały' })),
+    karta('Oglądane na YouTube, rzadko w radiu', 'Debiuty z roku: wyświetlenia teledysku wobec emisji w radiu.',
+      tabela(kol([['Wyświetlenia', (x) => fmt(x.ytv), 'num', (x) => x.ytv]]), r.youtube, { klik: (x) => idz('utwor', x.k), limit: 20, nazwaEksportu: 'YouTube sygnały', pusta: 'Wymaga klucza YouTube (instrukcja).' })));
+}).catch(blB(box));
+
+// ---------------- D11, D12: eksport do mAirList i zestawienie dla OZZ ----------------
+BIURO_WIDOKI.eksport = (box, s) => {
+  const wynik = el('div');
+  const miesiac = el('input', { type: 'month', value: dzisISO().slice(0, 7), 'aria-label': 'Miesiąc' });
+  const pokaz = (w, opis) => wynik.replaceChildren(el('p', {}, opis + ' ', el('a', { href: w.url, target: '_blank', rel: 'noopener' }, 'Otwórz plik na Dysku')));
+  box.replaceChildren(
+    karta('Eksport do mAirList (biblioteka mAirListDB)', 'CSV w UTF-8 z BOM: Title, Artist, Duration oraz kolumny atrybutów (Year, Tempo, Language, Category, Explicit, ISRC, Composer, Lyricist, Label). W mAirList: baza → Import → CSV; istniejące utwory dopasuje po wykonawcy i tytule, a nowe kolumny trafią do atrybutów (wiki mAirList).',
+      el('div', { class: 'wiersz' }, el('button', { class: 'przycisk', onclick: () => { toast('Przygotowuję plik…'); serwer('eksportMairlist', s.mojaStacja, S.od, S.do, null).then((w) => pokaz(w, fmt(w.utworow) + ' utworów (okres z filtra: ' + S.od + ' – ' + S.do + ').')).catch((e) => toast(e.message)); } }, 'Utwory stacji z okresu'))),
+    karta('Zestawienie do rozliczeń z OZZ (ZAiKS i inne)', 'Miesięczny wykaz: emisje, łączny czas, kompozytor, autor słów, wykonawca, wytwórnia, ISRC. Układ dopasuj do umowy stacji – ZAiKS nie ma jednolitego wzoru raportu.',
+      el('div', { class: 'wiersz' }, miesiac, el('button', { class: 'przycisk', onclick: () => { toast('Przygotowuję zestawienie…'); serwer('zestawienieOzz', s.mojaStacja, miesiac.value).then((w) => pokaz(w, `${fmt(w.utworow)} utworów, ${fmt(w.emisji)} emisji, ${fmt(w.sekund / 3600, 1)} h muzyki; bez czasu: ${fmt(w.bezCzasu)}, bez twórców: ${fmt(w.bezTworcow)}.`)).catch((e) => toast(e.message)); } }, 'Zestawienie miesiąca'))),
+    wynik, kartaAppleListy());
+};
+
+// ---------------- O5: poprawki dopasowań ----------------
+BIURO_WIDOKI.poprawki = (box) => serwerP('poprawki').then((d) => {
+  const z = el('input', { placeholder: 'klucz utworu (z profilu utworu, np. wykonawca|tytul)', style: { width: '100%' } });
+  const na = el('input', { placeholder: 'klucz docelowy', style: { width: '100%' } });
+  const typ = el('select', {}, el('option', { value: 'scal' }, 'Scal: ten sam utwór'), el('option', { value: 'nazwa' }, 'Popraw nazwę wyświetlaną'), el('option', { value: 'rozdziel' }, 'Rozdziel po tekście wykonawcy'));
+  const a = el('input', { placeholder: 'wykonawca (nazwa) albo tekst w wykonawcy (rozdziel)', style: { width: '100%' } }), t = el('input', { placeholder: 'tytuł (nazwa)', style: { width: '100%' } });
+  const dodaj = () => {
+    const p = typ.value === 'scal' ? { typ: 'scal', z: z.value.trim(), na: na.value.trim() } : typ.value === 'nazwa' ? { typ: 'nazwa', k: z.value.trim(), a: a.value.trim(), t: t.value.trim() }
+      : { typ: 'rozdziel', k: z.value.trim(), gdyWykonawca: a.value.trim(), na: na.value.trim() || kluczUtworu(a.value, (z.value.split('|')[1] || '')) };
+    serwer('zapiszPoprawke', p, null).then(() => { toast('Zapisano – Odbiornik przeliczy dotknięte miesiące przy najbliższym przeliczaniu'); _pamiec.clear(); idz('biuro', 'poprawki', true); }).catch((e) => toast(e.message));
+  };
+  box.replaceChildren(karta('Poprawki dopasowań utworów', 'Łączenie duplikatów (ten sam utwór pod różnymi tytułami), poprawa nazwy, rozdzielenie błędnie połączonych. Dane surowe zostają bez zmian – poprawki stosuje Odbiornik przy przeliczaniu (kilka godzin dla dużych utworów).',
+    el('div', { style: { display: 'grid', gap: '6px' } }, typ, z, na, a, t, el('button', { class: 'przycisk', onclick: dodaj }, 'Dodaj poprawkę'))),
+  karta('Zapisane poprawki', null, tabela([['Typ', (x) => x.typ], ['Utwór', (x) => x.z || x.k], ['Na / nazwa', (x) => x.na || ((x.a || '') + ' – ' + (x.t || '')) || x.gdyWykonawca], ['', (x) => el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); serwer('zapiszPoprawke', null, x.id).then(() => { _pamiec.clear(); idz('biuro', 'poprawki', true); }); } }, 'Usuń'), 'num']],
+    d.lista, { pusta: 'Brak poprawek.' })));
+}).catch(blB(box));
+// ---------------- D8: badanie słuchaczy ----------------
+BIURO_WIDOKI.ankieta = (box) => serwerP('ankiety').then((d) => {
+  const wybrane = [];
+  const tytul = el('input', { placeholder: 'tytuł, np. „Radio Meteor – test muzyczny, listopad”', style: { width: '100%' } });
+  const opis = el('input', { placeholder: 'opis dla słuchaczy (opcjonalnie)', style: { width: '100%' } });
+  const od = el('input', { type: 'number', min: 0, max: 600, placeholder: 'start fragmentu YouTube (s)', style: { width: '14em' } });
+  const lista = el('div', { style: { display: 'grid', gap: '4px' } }), wyniki = el('div');
+  const rysujWybrane = () => lista.replaceChildren(...(wybrane.length ? wybrane.map((x, i) => el('div', { class: 'wiersz', style: { flexWrap: 'nowrap' } },
+    el('span', { style: { flex: 1, minWidth: 0 } }, (i + 1) + '. ', el('b', {}, x.t), ' · ' + x.a),
+    el('button', { class: 'przycisk drugi maly', onclick: () => { wybrane.splice(i, 1); rysujWybrane(); } }, 'Usuń'))) : [el('p', { class: 'stan' }, 'Brak utworów – dodaj z wyszukiwarki albo z notowania (do 20).')]));
+  const dodaj = (x) => { if (wybrane.length >= 20) return toast('Najwyżej 20 utworów'); if (!wybrane.some((y) => y.k === x.k)) wybrane.push({ k: x.k, a: x.a, t: x.t }); rysujWybrane(); };
+  const q = el('input', { type: 'search', placeholder: 'szukaj utworu…', style: { flex: 1, minWidth: '10em' } });
+  const szukajU = () => serwer('szukaj', q.value).then((w) => wyniki.replaceChildren(...((w && w.wyniki) || []).slice(0, 10).map((x) => el('button', { class: 'chip', style: { margin: '2px' }, onclick: () => dodaj(x) }, '+ ' + x.t + ' · ' + x.a)))).catch((e) => toast(e.message));
+  q.addEventListener('keydown', (e) => { if (e.key === 'Enter') szukajU(); });
+  const zNotowania = () => serwer('notowanie', null, 15).then((w) => { (w.pozycje || []).slice(0, 15).forEach(dodaj); }).catch((e) => toast(e.message));
+  const utworz = () => serwer('zapiszAnkiete', { tytul: tytul.value, opis: opis.value, od: od.value, klucze: wybrane.map((x) => x.k) }).then((a) => {
+    if (a.blad) return toast(a.blad);
+    toast('Ankieta utworzona'); _pamiec.clear(); idz('biuro', 'ankieta', true);
+  }).catch((e) => toast(e.message));
+  rysujWybrane();
+  const kopiuj = (t) => { try { navigator.clipboard.writeText(t); toast('Skopiowano odnośnik'); } catch (e) { toast(t); } };
+  box.replaceChildren(
+    karta('Nowa ankieta', 'Słuchacze oceniają utwory: czy znają, jak bardzo lubią (1–5), czy mają dość. Strona ankiety działa bez logowania (serwuje ją Odbiornik); przy utworach z teledyskiem w YouTube pokazujemy odtwarzacz YouTube. Odpowiedzi są anonimowe.',
+      el('div', { style: { display: 'grid', gap: '6px' } }, tytul, opis, el('div', { class: 'wiersz' }, q, el('button', { class: 'przycisk drugi', onclick: szukajU }, 'Szukaj'), el('button', { class: 'przycisk drugi', onclick: zNotowania }, 'Top 15 notowania')), wyniki, lista,
+        el('div', { class: 'wiersz' }, od, el('button', { class: 'przycisk', onclick: utworz }, 'Utwórz ankietę')))),
+    karta('Ankiety', d.adresZnany ? null : 'Odnośniki pojawią się po najbliższym przeliczaniu (Odbiornik zapisuje swój adres w kroku „ankiety”).',
+      tabela([['Tytuł', (x) => x.tytul], ['Utworów', (x) => fmt(x.utworow), 'num'], ['Odpowiedzi', (x) => fmt(x.odpowiedzi), 'num'], ['Stan', (x) => x.aktywna ? 'otwarta' : 'zamknięta'],
+        ['', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap', gap: '4px' } },
+          x.adres ? el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); kopiuj(x.adres); } }, 'Odnośnik') : '',
+          el('button', { class: 'przycisk drugi maly', onclick: (e) => { e.stopPropagation(); serwer('zamknijAnkiete', x.id, !x.aktywna).then(() => { _pamiec.clear(); idz('biuro', 'ankieta', true); }); } }, x.aktywna ? 'Zamknij' : 'Otwórz')), 'num']],
+      d.ankiety, { pusta: 'Brak ankiet.', klik: (x) => pokazWyniki(x.id) })),
+    el('div', { id: 'ankietaWyniki' }));
+  const pokazWyniki = (id) => serwer('wynikiAnkiety', id).then((w) => {
+    if (w.blad) return toast(w.blad);
+    const cel = document.getElementById('ankietaWyniki');
+    cel.replaceChildren(karta('Wyniki: ' + w.tytul, `${fmt(w.odpowiedzi)} odpowiedzi` + (w.czekaNaScalenie ? `, ${fmt(w.czekaNaScalenie)} czeka na scalenie (przy najbliższym przeliczaniu)` : '') + '. Wskaźnik = % ocen 4–5 minus % „mam dość” wśród znających (definicja Music Base). Przy małej liczbie odpowiedzi różnice mogą być przypadkowe.',
+      tabela([['Utwór', (x) => el('span', {}, el('b', {}, x.t), ' · ' + x.a)], ['Znajomość', (x) => x.znajomosc == null ? '–' : fmt(x.znajomosc, 1) + '%', 'num'], ['Sympatia', (x) => x.sympatia == null ? '–' : fmt(x.sympatia, 2), 'num'],
+        ['4–5', (x) => x.pozytywne == null ? '–' : fmt(x.pozytywne, 1) + '%', 'num'], ['Mam dość', (x) => x.zmeczenie == null ? '–' : fmt(x.zmeczenie, 1) + '%', 'num'], ['Wskaźnik', (x) => x.wskaznik == null ? '–' : fmt(x.wskaznik, 1), 'num'], ['Ocen', (x) => fmt(x.ocen), 'num']],
+      w.utwory.slice().sort((a, b) => (b.wskaznik ?? -999) - (a.wskaznik ?? -999)), { pusta: 'Brak utworów.' })));
+    cel.scrollIntoView({ behavior: 'smooth' });
+  }).catch((e) => toast(e.message));
+}).catch(blB(box));
+</script>

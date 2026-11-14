@@ -46,11 +46,12 @@ def mb(b: int) -> str:
 
 def main() -> int:
     mag = MagazynDysk()
-    lista = mag.wyslij("eksportPlikow", lista=True)
-    if not lista.get("ok"):
-        print("Odbiornik bez akcji eksportPlikow (OdbiornikEksport.gs) – nie da się zmierzyć.", flush=True)
+    try:
+        pliki = mag.lista_partiami("eksportPlikow", lista=True)
+    except RuntimeError as e:
+        print(f"Odbiornik nie podał listy plików ({e}) – nie da się zmierzyć.", flush=True)
         return 1
-    w = podsumuj(lista["pliki"])
+    w = podsumuj(pliki)
     print("Rozmiar danych w Odbiorniku (pliki skompresowane gzip, tak jak na Dysku):")
     for nazwa, opis in (("widoki", "widoki dla panelu (rankingi, tygodnie, wyszukiwarka…)"), ("metadane", "lekkie metadane utworów"), ("emisje", f"surowe emisje, {w['stacji']} stacji")):
         n, b = w["grupy"].get(nazwa, [0, 0])
@@ -77,6 +78,13 @@ def main() -> int:
               + (" – PRZERWANO po " + str(r["sekund"]) + " s, wynik niepełny" if r.get("przerwano") else f" (liczone {r['sekund']} s)"))
     else:
         print("Odbiornik bez trybu rozmiarów podsumowań – wklej nowy OdbiornikEksport.gs, żeby zmierzyć wszystko.")
+    try:
+        drzewo = mag.lista_partiami("eksportPlikow", drzewo=True)
+        print(f"Paczka danych aplikacji offline (PWA): {len(drzewo)} plików, {mb(sum(p['b'] for p in drzewo))}")
+        najw = sorted(drzewo, key=lambda p: -p["b"])[:5]
+        print("  największe pliki: " + ", ".join(f"{p['s'][2:]} ({mb(p['b'])})" for p in najw))
+    except RuntimeError as e:
+        print(f"Tryb drzewa niedostępny ({e}).")
     print("Uwaga: to rozmiary skompresowane; w aplikacji (np. jako Parquet) wielkość będzie inna – zmierzę przy budowie.")
     return 0
 

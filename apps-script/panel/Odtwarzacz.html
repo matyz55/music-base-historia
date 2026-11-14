@@ -1,0 +1,341 @@
+<script>
+'use strict';
+// ======================= Music Base – odtwarzacz (pasek na dole strony) =======================
+// Pasek na całą szerokość, widoczny na wszystkich widokach (panel to jedna strona – widoki się podmieniają, odtwarzacz
+// zostaje). Rozwijany panel: Teraz (okładka, utwór, audycja teraz/potem), Ostatnio grane, Kolejka stacji, Stacje.
+// Strumienie: STRUMIENIE (narzedzia/strumienie.json) – najlepsza jakość najpierw, przy błędzie kolejny adres,
+// HLS (Polskie Radio) natywnie albo przez hls.js. Co gra: teraz() co 60 s; okładka z iTunes (Odsluch); audycja
+// z ramówek; ekran blokady przez Media Session API; skróty: spacja, M (wycisz), ← → (poprzednia/następna stacja).
+const Odtwarzacz = (function () {
+  const HLS_JS = 'https:\/\/cdnjs.cloudflare.com/ajax/libs/hls.js/1.5.13/hls.min.js';
+  const audio = new Audio();
+  audio.preload = 'none';
+  const box = document.getElementById('gracz');
+  const pam = { get(k, d) { try { const v = localStorage.getItem('mb-gracz-' + k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem('mb-gracz-' + k, JSON.stringify(v)); } catch (e) { /* bez pamięci */ } } };
+  let hls = null, stacja = null, nr = 0, teraz = null, ostatnie = [], audycja = null, potem = null, okladka = null, zegar = null;
+  let stanPol = 'stop';   // stop | laczenie | gra | pauza | blad
+  let komunikat = '', rozwiniety = false, zakladka = 'teraz', wylacznik = null, wylacznikDo = 0, szukajStacji = '';
+  let kolejka = pam.get('kolejka', []);
+  audio.volume = pam.get('glosnosc', 0.9);
+  audio.muted = !!pam.get('wyciszony', false);
+
+  // ---------------- strumienie ----------------
+  function strumienieStacji(id) {
+    if (window.STRUMIENIE[id]) return window.STRUMIENIE[id];
+    const siec = S.jedn[id] && S.jedn[id].czlonkowie;
+    if (siec) for (const c of siec) if (window.STRUMIENIE[c.id]) return window.STRUMIENIE[c.id];
+    return [];
+  }
+  const maStrumien = (id) => strumienieStacji(id).length > 0;
+  const opisStrumienia = (s) => s ? [s.codec, s.bitrate ? s.bitrate + ' kb/s' : '', s.hls ? 'HLS' : ''].filter(Boolean).join(' · ') || 'strumień' : '';
+  function wczytajHls() {
+    if (window.Hls) return Promise.resolve();
+    return new Promise((ok, zle) => { const s = document.createElement('script'); s.src = HLS_JS; s.onload = ok; s.onerror = () => zle(new Error('Nie udało się wczytać hls.js')); document.head.append(s); });
+  }
+  function zatrzymajHls() { if (hls) { hls.destroy(); hls = null; } }
+  // HLS: najpierw hls.js (MediaSource – przewidywalne we wszystkich przeglądarkach), potem natywnie (Safari, Android,
+  // nowsze Chrome deklarują „maybe”, ale w ramce Apps Script bywa inaczej). Każda próba ma limit czasu, a błędy są
+  // zbierane, żeby komunikat mówił, co dokładnie zawiodło (11.11.2026: Polskie Radio nie grało u użytkownika).
+  let proba = 0, limitCzasu = null, bledy = [], probaNr = 0, zgloszona = -1;
+  const LIMIT_POLACZENIA_MS = 15000;
+  function sposobyHls() {
+    const s = [];
+    if (window.MediaSource || window.ManagedMediaSource) s.push('hls.js');
+    if (audio.canPlayType('application/vnd.apple.mpegurl')) s.push('natywnie');
+    return s.length ? s : ['hls.js'];
+  }
+  function uruchomStrumien() {
+    const s = strumienieStacji(stacja)[nr];
+    if (!s) { ustawStan('blad', 'Żaden strumień tej stacji nie odpowiada. Spróbuj później.'); return; }
+    zatrzymajHls();
+    clearTimeout(limitCzasu);
+    const czyHls = s.hls || /\.m3u8/.test(s.url), sposob = czyHls ? sposobyHls()[proba] : 'bezpośrednio';
+    ustawStan('laczenie', 'Łączenie… ' + opisStrumienia(s) + (czyHls ? ' (' + sposob + ')' : ''));
+    const moj = ++probaNr;
+    limitCzasu = setTimeout(() => { if (stanPol === 'laczenie' && moj === probaNr) blad(new Error('brak dźwięku po ' + LIMIT_POLACZENIA_MS / 1000 + ' s')); }, LIMIT_POLACZENIA_MS);
+    if (czyHls && sposob === 'hls.js') {
+      wczytajHls().then(() => {
+        if (!window.Hls.isSupported()) throw new Error('hls.js: przeglądarka bez MediaSource');
+        hls = new window.Hls({ lowLatencyMode: false, manifestLoadingMaxRetry: 2, levelLoadingMaxRetry: 2, fragLoadingMaxRetry: 3 });
+        hls.on(window.Hls.Events.MANIFEST_PARSED, () => audio.play().catch(blad));
+        hls.on(window.Hls.Events.ERROR, (_, d) => { if (d.fatal) blad(new Error('hls.js: ' + d.type + ' / ' + d.details + (d.response && d.response.code ? ' (HTTP ' + d.response.code + ')' : ''))); });
+        hls.loadSource(s.url); hls.attachMedia(audio);
+      }).catch(blad);
+    } else { audio.src = s.url; audio.play().catch(blad); }
+  }
+  function blad(e) {
+    if (!stacja) return;
+    if (e && e.name === 'AbortError') return;   // play() przerwane przez zmianę źródła – to nie błąd strumienia
+    if (e && e.name === 'NotAllowedError') { clearTimeout(limitCzasu); ustawStan('pauza', 'Kliknij ▶, aby słuchać (przeglądarka wymaga kliknięcia).'); return; }
+    if (zgloszona === probaNr) return;   // ta sama próba zgłasza błąd dwa razy (zdarzenie error + odrzucone play())
+    zgloszona = probaNr;
+    const s = strumienieStacji(stacja)[nr], czyHls = s && (s.hls || /\.m3u8/.test(s.url));
+    const opis = (e && e.message) || (audio.error ? 'błąd odtwarzacza ' + audio.error.code + (audio.error.message ? ': ' + audio.error.message : '') : 'nieznany błąd');
+    bledy.push((s ? opisStrumienia(s) : '?') + (czyHls ? ' ' + sposobyHls()[proba] : '') + ' – ' + opis);
+    console.warn('Odtwarzacz:', bledy[bledy.length - 1]);
+    zatrzymajHls(); audio.removeAttribute('src');
+    if (czyHls && proba + 1 < sposobyHls().length) { proba++; uruchomStrumien(); return; }
+    proba = 0; nr++;
+    if (nr < strumienieStacji(stacja).length) uruchomStrumien();
+    else {
+      nr = 0; clearTimeout(limitCzasu);
+      ustawStan('blad', 'Nie udało się połączyć ze strumieniem. Szczegóły: ' + bledy.slice(-3).join('; '));
+    }
+  }
+  // przy hls.js błędy zgłasza samo hls.js (src to blob:) – tu tylko odtwarzanie bezpośrednie i natywne HLS
+  audio.addEventListener('error', () => { if (!hls && audio.getAttribute('src') && stanPol !== 'stop') blad(); });
+  audio.addEventListener('playing', () => { clearTimeout(limitCzasu); bledy = []; ustawStan('gra', ''); });
+  audio.addEventListener('waiting', () => { if (stanPol === 'gra') ustawStan('laczenie', 'Buforowanie…'); });
+  audio.addEventListener('pause', () => { if (stanPol === 'gra' || stanPol === 'laczenie') ustawStan('pauza', ''); });
+  function ustawStan(s, k) { stanPol = s; komunikat = k || ''; rysuj(); }
+
+  // ---------------- sterowanie ----------------
+  function graj(id, opcje) {
+    if (!maStrumien(id)) { toast('Brak działającego strumienia tej stacji.'); return; }
+    if (!kolejka.includes(id)) kolejka.unshift(id);
+    pam.set('kolejka', kolejka); pam.set('ostatnia', id);
+    if (stacja !== id) { teraz = null; ostatnie = []; audycja = null; potem = null; okladka = null; nr = 0; }
+    proba = 0; bledy = [];
+    stacja = id;
+    if (opcje && opcje.nr !== undefined) nr = opcje.nr;
+    pokazPasek();
+    uruchomStrumien();
+    odswiezInfo();
+    clearInterval(zegar); zegar = setInterval(odswiezInfo, 60000);
+  }
+  function przelacz() {
+    if (!stacja) { const o = pam.get('ostatnia', null) || kolejka[0]; if (o) graj(o); return; }
+    if (stanPol === 'gra' || stanPol === 'laczenie') { audio.pause(); zatrzymajHls(); audio.removeAttribute('src'); audio.load(); ustawStan('pauza', ''); }
+    else graj(stacja);   // radio na żywo: po pauzie od razu „teraz”, nie od miejsca zatrzymania
+  }
+  function stop() {
+    audio.pause(); zatrzymajHls(); clearTimeout(limitCzasu); audio.removeAttribute('src'); audio.load(); clearInterval(zegar); ustawWylacznik(0);
+    stacja = null; stanPol = 'stop'; rozwiniety = false; box.hidden = true; document.body.classList.remove('z-graczem');
+  }
+  // M7: gesty – pasek: w bok = poprzednia / następna stacja z kolejki, w górę = rozwiń; panel: w dół (od góry listy) = zwiń
+  function gesty(elem, akcje, tylkoNaGorze) {
+    let x0 = null, y0 = null, t0 = 0;
+    elem.addEventListener('touchstart', (e) => { if (e.touches.length !== 1) return; x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now(); }, { passive: true });
+    elem.addEventListener('touchend', (e) => {
+      if (x0 === null) return;
+      const dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0, szybko = Date.now() - t0 < 600;
+      x0 = null;
+      if (!szybko) return;
+      if (Math.abs(dx) > 60 && Math.abs(dx) > 1.5 * Math.abs(dy)) { if (dx < 0 && akcje.lewo) akcje.lewo(); if (dx > 0 && akcje.prawo) akcje.prawo(); }
+      else if (Math.abs(dy) > 60 && Math.abs(dy) > 1.5 * Math.abs(dx)) {
+        if (dy > 0 && akcje.dol && (!tylkoNaGorze || elem.scrollTop <= 0)) akcje.dol();
+        if (dy < 0 && akcje.gora) akcje.gora();
+      }
+    }, { passive: true });
+  }
+  function nastepna(krok = 1) {
+    if (!kolejka.length) return;
+    const i = stacja ? kolejka.indexOf(stacja) : -1;
+    graj(kolejka[(i + krok + kolejka.length) % kolejka.length]);
+  }
+  function doKolejki(id) {
+    if (!maStrumien(id)) { toast('Brak działającego strumienia tej stacji.'); return; }
+    if (!kolejka.includes(id)) kolejka.push(id);
+    pam.set('kolejka', kolejka);
+    toast('Dodano do kolejki: ' + nazwa(id));
+    pokazPasek();
+  }
+  function przesun(id, o) {
+    const i = kolejka.indexOf(id), j = i + o;
+    if (i < 0 || j < 0 || j >= kolejka.length) return;
+    [kolejka[i], kolejka[j]] = [kolejka[j], kolejka[i]]; pam.set('kolejka', kolejka); rysuj();
+  }
+  function usunZKolejki(id) { kolejka = kolejka.filter((x) => x !== id); pam.set('kolejka', kolejka); rysuj(); }
+  function ustawGlosnosc(v) { audio.volume = Math.max(0, Math.min(1, v)); if (audio.volume > 0) audio.muted = false; pam.set('glosnosc', audio.volume); pam.set('wyciszony', audio.muted); rysujGlosnosc(); }
+  function wycisz() { audio.muted = !audio.muted; pam.set('wyciszony', audio.muted); rysujGlosnosc(); }
+  function ustawWylacznik(min) {
+    clearTimeout(wylacznik); wylacznik = null; wylacznikDo = 0;
+    if (min > 0) { wylacznikDo = Date.now() + min * 60e3; wylacznik = setTimeout(() => { stop(); toast('Wyłącznik czasowy: odtwarzanie zatrzymane'); }, min * 60e3); toast('Wyłączę za ' + min + ' min'); }
+    rysuj();
+  }
+  function pokazPasek() { box.hidden = false; document.body.classList.add('z-graczem'); rysuj(); }
+
+  // ---------------- co gra, audycja, okładka ----------------
+  const chwila = () => new Date(Date.now() - new Date().getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
+  function odswiezInfo() {
+    const id = stacja;
+    if (!id) return;
+    serwer('teraz', [id]).then((w) => {
+      if (id !== stacja) return;
+      const u = ((w.stacje || {})[id] || {}).utwory || [];
+      const nowy = u[0] || null;
+      if (nowy && (!teraz || teraz.k !== nowy.k)) {
+        okladka = null;
+        Odsluch.znajdzFragment({ a: nowy.a, t: nowy.t }).then((f) => { if (f && teraz && teraz.k === nowy.k) { teraz.fragment = f; okladka = f.duza || f.art; rysuj(); mediaSession(); } }).catch(() => {});
+      }
+      if (nowy && teraz && teraz.k === nowy.k) nowy.fragment = teraz.fragment;
+      teraz = nowy; ostatnie = u;
+      rysuj(); mediaSession();
+    }).catch(() => {});
+    if (maRamowke(id)) {
+      serwerP('ramowka', dzisISO(), [id]).then((r) => {
+        if (id !== stacja) return;
+        const l = Array.isArray((r.stacje || {})[id]) ? r.stacje[id] : [], c = chwila();
+        const glowne = l.filter((a) => (Date.parse(a.do) - Date.parse(a.od)) >= 20 * 60e3);
+        audycja = glowne.filter((a) => a.od <= c && a.do > c).pop() || l.filter((a) => a.od <= c && a.do > c).pop() || null;
+        potem = glowne.filter((a) => a.od > c)[0] || null;
+        rysuj(); mediaSession();
+      }).catch(() => {});
+    }
+  }
+  function mediaSession() {
+    if (!('mediaSession' in navigator) || !stacja) return;
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: teraz ? teraz.t : nazwa(stacja), artist: teraz ? teraz.a : (audycja ? audycja.tytul : 'Radio na żywo'),
+        album: nazwa(stacja) + (audycja ? ' · ' + audycja.tytul : ''),
+        artwork: okladka ? [{ src: okladka, sizes: '600x600', type: 'image/jpeg' }] : ((window.LOGA || {})[stacja] ? [{ src: window.LOGA[stacja], sizes: '96x96', type: 'image/png' }] : []),
+      });
+      navigator.mediaSession.setActionHandler('play', () => przelacz());
+      navigator.mediaSession.setActionHandler('pause', () => przelacz());
+      navigator.mediaSession.setActionHandler('nexttrack', () => nastepna(1));
+      navigator.mediaSession.setActionHandler('previoustrack', () => nastepna(-1));
+    } catch (e) { /* przeglądarka bez Media Session */ }
+  }
+
+  // ---------------- rysowanie ----------------
+  const ik = (d, et, f, kl = 'ikona-btn', extra = {}) => el('button', Object.assign({ class: kl, title: et, 'aria-label': et, html: svgIkona(d), onclick: f }, extra));
+  const IKG = {
+    poprz: '<path d="M18 20 8 12l10-8z" fill="currentColor" stroke="none"/><path d="M6 4v16"/>',
+    nast: '<path d="m6 4 10 8-10 8z" fill="currentColor" stroke="none"/><path d="M18 4v16"/>',
+    glos: '<path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" stroke="none"/><path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12"/>',
+    cisza: '<path d="M4 9v6h4l5 4V5L8 9z" fill="currentColor" stroke="none"/><path d="m17 9 5 6M22 9l-5 6"/>',
+    gora: '<path d="m6 15 6-6 6 6"/>', dol: '<path d="m6 9 6 6 6-6"/>',
+    serce: '<path d="M12 20s-7-4.4-9-9a5 5 0 0 1 9-3 5 5 0 0 1 9 3c-2 4.6-9 9-9 9z"/>',
+    zegar: '<circle cx="12" cy="13" r="8"/><path d="M12 9v4l2 2M9 2h6"/>',
+    w_gore: '<path d="m7 14 5-5 5 5"/>', w_dol: '<path d="m7 10 5 5 5-5"/>',
+  };
+  let glosnoscBox = null;
+  function rysujGlosnosc() {
+    if (!glosnoscBox) return;
+    const ikona = glosnoscBox.querySelector('.wycisz');
+    if (ikona) { ikona.innerHTML = svgIkona(audio.muted || audio.volume === 0 ? IKG.cisza : IKG.glos); ikona.title = audio.muted ? 'Włącz dźwięk (M)' : 'Wycisz (M)'; }
+    const s = glosnoscBox.querySelector('input'); if (s) { s.value = audio.muted ? 0 : audio.volume; s.style.setProperty('--proc', (audio.muted ? 0 : audio.volume * 100) + '%'); }
+  }
+  function okladkaEl(duza) {
+    return el('button', { class: 'g-okladka' + (duza ? ' duza' : ''), style: { backgroundImage: okladka ? `url("${okladka}")` : 'none' }, title: teraz ? 'Profil utworu' : 'Profil stacji',
+      onclick: () => (teraz ? idz('utwor', teraz.k) : stacja && idz('stacja', stacja)) }, okladka ? logo(stacja, 'm') : logo(stacja, duza ? 'd' : ''));
+  }
+  function rysuj() {
+    if (box.hidden) return;
+    const gra = stanPol === 'gra', laczy = stanPol === 'laczenie';
+    const s = stacja ? strumienieStacji(stacja)[nr] : null;
+    const ulubStacja = stacja && (S.moje.ulubioneStacje || []).includes(stacja);
+    const ulubUtwor = teraz && (S.moje.ulubioneUtwory || {})[teraz.k];
+    // lewa część
+    const info = el('div', { class: 'g-info' },
+      stacja ? okladkaEl(false) : el('div', { class: 'g-okladka' }),
+      el('div', { class: 'g-tekst' },
+        stacja ? el('button', { class: 'g-tytul', onclick: () => (teraz ? idz('utwor', teraz.k) : idz('stacja', stacja)) }, teraz ? teraz.t : nazwa(stacja)) : el('b', { class: 'g-tytul' }, 'Odtwarzacz'),
+        el('div', { class: 'g-wyk' }, stacja ? [teraz ? el('span', {}, teraz.a) : null, teraz ? ' · ' : null, el('button', { class: 'link', onclick: () => idz('stacja', stacja) }, nazwa(stacja))]
+          : 'Wybierz stację – ▶ w Stacjach albo w panelu „Stacje” tutaj'),
+        el('div', { class: 'g-aud' + (stanPol === 'blad' ? ' blad' : '') }, komunikat || (audycja ? '🎙 ' + audycja.tytul + (audycja.prowadzacy ? ' · ' + audycja.prowadzacy : '') + ' · do ' + audycja.do.slice(11, 16) : (stacja && teraz ? 'od ' + teraz.g : '')))));
+    // środek
+    const srodek = el('div', { class: 'g-ster' },
+      ik(IKG.poprz, 'Poprzednia stacja z kolejki (←)', () => nastepna(-1), 'ikona-btn bez-ramki', { disabled: kolejka.length < 2 }),
+      el('button', { class: 'g-graj' + (laczy ? ' laczy' : ''), title: gra || laczy ? 'Zatrzymaj (spacja)' : 'Słuchaj (spacja)', 'aria-label': gra || laczy ? 'Zatrzymaj' : 'Słuchaj', html: svgIkona(gra || laczy ? IK.pauza : IK.graj), onclick: przelacz }),
+      ik(IKG.nast, 'Następna stacja z kolejki (→)', () => nastepna(1), 'ikona-btn bez-ramki', { disabled: kolejka.length < 2 }),
+      stacja ? el('span', { class: 'g-na-zywo' + (gra ? ' gra' : '') }, el('i'), gra ? 'NA ŻYWO' : laczy ? 'ŁĄCZENIE' : 'PAUZA') : null);
+    // prawa część
+    glosnoscBox = el('div', { class: 'g-glosnosc tylko-szeroki' }, ik(IKG.glos, 'Wycisz (M)', wycisz, 'ikona-btn bez-ramki wycisz'),
+      (() => { const r = el('input', { type: 'range', min: 0, max: 1, step: 0.02, 'aria-label': 'Głośność' }); r.addEventListener('input', () => ustawGlosnosc(+r.value)); return r; })());
+    const prawa = el('div', { class: 'g-prawa' },
+      teraz ? ik(IKG.serce, ulubUtwor ? 'Usuń z ulubionych utworów' : 'Dodaj utwór do ulubionych', () => serwer('zapiszMoje', { ulubionyUtwor: [teraz.k, !ulubUtwor] }).then((m) => { S.moje = m; rysuj(); toast(ulubUtwor ? 'Usunięto z ulubionych' : 'Dodano do ulubionych utworów'); }), 'ikona-btn bez-ramki tylko-szeroki' + (ulubUtwor ? ' serce' : '')) : null,
+      stacja ? ik(IK.gwiazda, ulubStacja ? 'Usuń stację z ulubionych' : 'Dodaj stację do ulubionych', (e) => { przelaczUlubionaStacje(stacja, e.currentTarget); setTimeout(rysuj, 800); }, 'ikona-btn bez-ramki tylko-szeroki' + (ulubStacja ? ' akt' : '')) : null,
+      glosnoscBox,
+      wylacznikDo ? el('span', { class: 'sub tylko-szeroki', title: 'Wyłącznik czasowy' }, '⏾ ' + Math.ceil((wylacznikDo - Date.now()) / 60e3) + ' min') : null,
+      ik(rozwiniety ? IKG.dol : IKG.gora, rozwiniety ? 'Zwiń' : 'Więcej: utwór, ostatnio grane, kolejka, stacje', () => { rozwiniety = !rozwiniety; rysuj(); }, 'ikona-btn g-rozwin'));
+    const pasek = el('div', { class: 'g-pasek' }, info, srodek, prawa);
+    const pan = rozwiniety ? panel(s) : '';
+    gesty(pasek, { lewo: () => nastepna(1), prawo: () => nastepna(-1), gora: () => { if (!rozwiniety) { rozwiniety = true; rysuj(); } }, dol: () => { if (rozwiniety) { rozwiniety = false; rysuj(); } } });
+    if (pan) gesty(pan, { dol: () => { rozwiniety = false; rysuj(); } }, true);
+    box.replaceChildren(pan, pasek);
+    rysujGlosnosc();
+  }
+
+  function panel(s) {
+    const zak = [['teraz', 'Teraz'], ['ostatnio', 'Ostatnio grane'], ['kolejka', 'Kolejka (' + kolejka.length + ')'], ['stacje', 'Stacje']];
+    const tresc = el('div', { class: 'g-panel-tresc' });
+    if (zakladka === 'teraz') {
+      tresc.append(el('div', { class: 'g-teraz' },
+        stacja ? okladkaEl(true) : null,
+        el('div', { style: { minWidth: 0, display: 'grid', gap: '6px', alignContent: 'start' } },
+          el('div', { class: 'sub' }, stacja ? nazwa(stacja) + (s ? ' · ' + opisStrumienia(s) : '') : 'Nic nie gra'),
+          el('h2', { style: { fontSize: '22px' } }, teraz ? teraz.t : stacja ? nazwa(stacja) : 'Wybierz stację'),
+          teraz ? el('div', { style: { fontSize: '16px', color: 'var(--tekst2)' } }, teraz.a) : null,
+          teraz && teraz.fragment && teraz.fragment.album ? el('div', { class: 'sub' }, '💿 ' + teraz.fragment.album + (teraz.fragment.wydanie ? ' (' + teraz.fragment.wydanie.slice(0, 4) + ')' : '')) : null,
+          teraz ? el('div', { class: 'wiersz', style: { marginTop: '4px' } },
+            el('button', { class: 'przycisk maly', onclick: () => { rozwiniety = false; idz('utwor', teraz.k); } }, 'Profil utworu'),
+            Odsluch.ikonyOdsluchu({ a: teraz.a, t: teraz.t }, teraz.fragment || null)) : null,
+          el('div', { class: 'g-audycje' },
+            audycja ? el('div', {}, el('span', { class: 'sub' }, 'Teraz ' + audycja.od.slice(11, 16) + '–' + audycja.do.slice(11, 16)), el('b', {}, audycja.tytul), audycja.prowadzacy ? el('span', { class: 'sub' }, audycja.prowadzacy) : null) : null,
+            potem ? el('div', {}, el('span', { class: 'sub' }, 'Potem ' + potem.od.slice(11, 16)), el('b', {}, potem.tytul), potem.prowadzacy ? el('span', { class: 'sub' }, potem.prowadzacy) : null) : null,
+            stacja && !audycja && !potem ? el('span', { class: 'sub' }, maRamowke(stacja) ? 'Brak audycji w ramówce o tej porze.' : 'Ta stacja nie publikuje ramówki.') : null),
+          stacja ? el('div', { class: 'wiersz' },
+            strumienieStacji(stacja).length > 1 ? el('label', { class: 'sub' }, 'Jakość ', (() => {
+              const w = el('select', { 'aria-label': 'Strumień' }, strumienieStacji(stacja).map((x, i) => el('option', { value: i }, opisStrumienia(x) + (x.nazwa ? ' – ' + x.nazwa.replace(/\s*\(.*\)$/, '') : ''))));
+              w.value = nr; w.addEventListener('change', () => graj(stacja, { nr: +w.value })); return w;
+            })()) : null,
+            el('label', { class: 'sub' }, 'Wyłącz za ', (() => {
+              const w = el('select', { 'aria-label': 'Wyłącznik czasowy' }, [[0, 'nigdy'], [15, '15 min'], [30, '30 min'], [45, '45 min'], [60, '1 h'], [90, '1,5 h'], [120, '2 h']].map(([v, n]) => el('option', { value: v }, n)));
+              w.value = wylacznikDo ? '' : 0; w.addEventListener('change', () => ustawWylacznik(+w.value)); return w;
+            })()),
+            el('button', { class: 'przycisk drugi maly', onclick: () => { rozwiniety = false; idz('stacja', stacja); } }, 'Profil stacji'),
+            maRamowke(stacja) ? el('button', { class: 'przycisk drugi maly', onclick: () => { rozwiniety = false; idz('epg', stacja); } }, 'Ramówka') : null,
+            el('button', { class: 'przycisk drugi maly', onclick: stop }, 'Zamknij odtwarzacz')) : null)));
+    } else if (zakladka === 'ostatnio') {
+      tresc.append(ostatnie.length ? el('div', { class: 'g-lista' }, ostatnie.map((u, i) => el('button', { class: 'g-poz', onclick: () => { rozwiniety = false; idz('utwor', u.k); } },
+        el('span', { class: 'sub num' }, u.g), el('span', { class: 'g-poz-t' }, el('b', {}, u.t), el('span', {}, u.a)), i === 0 ? el('span', { class: 'znacznik' }, 'teraz') : null)))
+        : el('p', { class: 'opis' }, stacja ? 'Brak danych o ostatnio granych utworach tej stacji.' : 'Włącz stację, aby zobaczyć, co grała.'));
+    } else if (zakladka === 'kolejka') {
+      tresc.append(kolejka.length ? el('div', { class: 'g-lista' }, kolejka.map((id, i) => el('div', { class: 'g-poz' + (id === stacja ? ' akt' : '') },
+        el('button', { class: 'g-poz-t', onclick: () => graj(id) }, logo(id, 'm'), el('b', {}, nazwa(id)), id === stacja ? el('span', { class: 'znacznik' }, stanPol === 'gra' ? 'gra' : 'wybrana') : null),
+        ik(IKG.w_gore, 'Wyżej', () => przesun(id, -1), 'ikona-btn bez-ramki', { disabled: i === 0 }),
+        ik(IKG.w_dol, 'Niżej', () => przesun(id, 1), 'ikona-btn bez-ramki', { disabled: i === kolejka.length - 1 }),
+        ik(IK.zamknij, 'Usuń z kolejki', () => usunZKolejki(id), 'ikona-btn bez-ramki'))))
+        : el('p', { class: 'opis' }, 'Kolejka jest pusta. Dodaj stacje w zakładce „Stacje” albo przyciskiem „Do kolejki” w profilu stacji. Strzałki ← → przełączają stacje z kolejki.'));
+    } else {
+      const pole = el('input', { type: 'search', placeholder: 'Szukaj stacji', value: szukajStacji, style: { width: '100%', maxWidth: '320px' }, 'aria-label': 'Szukaj stacji' });
+      const lista = el('div', { class: 'g-stacje' });
+      const ulub = S.moje.ulubioneStacje || [];
+      const rysujListe = () => {
+        const q = szukajStacji.toLowerCase();
+        const wszystkie = Object.keys(window.STRUMIENIE).filter((id) => S.jedn[id] || NAZWY_ZAPASOWE[id]).filter((id) => !q || nazwa(id).toLowerCase().includes(q))
+          .sort((a, b) => ((ulub.includes(a) ? ulub.indexOf(a) : 1e3) - (ulub.includes(b) ? ulub.indexOf(b) : 1e3)) || porownajStacje(a, b));
+        lista.replaceChildren(...wszystkie.map((id) => el('div', { class: 'g-stacja' + (id === stacja ? ' akt' : '') },
+          el('button', { class: 'g-poz-t', onclick: () => graj(id), title: 'Słuchaj' }, logo(id, 'm'), el('span', {}, nazwa(id) + (ulub.includes(id) ? ' ★' : ''))),
+          ik(IK.dodaj, 'Do kolejki', () => { doKolejki(id); rysuj(); }, 'ikona-btn bez-ramki', { disabled: kolejka.includes(id) }))));
+      };
+      pole.addEventListener('input', () => { szukajStacji = pole.value; rysujListe(); });
+      rysujListe();
+      tresc.append(pole, lista);
+    }
+    return el('div', { class: 'g-panel' }, el('div', { class: 'g-panel-w' },
+      el('div', { class: 'zakladki' }, zak.map(([k, n]) => el('button', { class: zakladka === k ? 'akt' : '', onclick: () => { zakladka = k; rysuj(); } }, n))), tresc));
+  }
+
+  // ---------------- skróty klawiszowe ----------------
+  document.addEventListener('keydown', (e) => {
+    if (box.hidden || e.ctrlKey || e.metaKey || e.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test((e.target || {}).tagName || '') || (e.target && e.target.isContentEditable)) return;
+    if (e.code === 'Space') { e.preventDefault(); przelacz(); }
+    else if (e.key === 'm' || e.key === 'M') wycisz();
+    else if (e.key === 'ArrowRight' && kolejka.length > 1) nastepna(1);
+    else if (e.key === 'ArrowLeft' && kolejka.length > 1) nastepna(-1);
+    else if (e.key === 'Escape' && rozwiniety) { rozwiniety = false; rysuj(); }
+  });
+  setInterval(() => { if (wylacznikDo && !box.hidden) rysuj(); }, 60e3);
+
+  /** Po wczytaniu panelu: pasek z ostatnio słuchaną stacją (bez automatycznego odtwarzania). */
+  function przywroc() {
+    const o = pam.get('ostatnia', null);
+    if (o && maStrumien(o)) { stacja = o; stanPol = 'pauza'; komunikat = 'Ostatnio słuchana – kliknij ▶'; pokazPasek(); odswiezInfo(); }
+  }
+  return { graj, doKolejki, maStrumien, przelacz, stop, przywroc, get stacja() { return stacja; } };
+})();
+</script>

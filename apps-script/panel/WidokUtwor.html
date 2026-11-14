@@ -1,0 +1,465 @@
+<script>
+'use strict';
+// ======================= Profil utworu (U1–U8) =======================
+// Wszystkie emisje: emisjeUtworu (paczki _utwory/<miesiąc>) – rok po roku, równolegle. Liczymy w przeglądarce:
+// stacje (sieci bez powtórzeń wspólnych pasm: ten sam utwór na stacjach sieci w odstępie ≤ 3 min = 1 emisja),
+// pierwsze stacje, stacje, które go „wylansowały” (grały przed tygodniem szczytu w całym radiu), oś życia, mapa godzin.
+
+function krajNazwa(cc) { try { return new Intl.DisplayNames(['pl'], { type: 'region' }).of(cc); } catch (e) { return cc; } }
+const JEZYKI = { pl: 'polski', en: 'angielski', inny: 'inny niż polski i angielski', instr: 'instrumentalny' };
+const poniedzialekTyg = (iso) => { const d = new Date(iso.slice(0, 10) + 'T12:00:00Z'); d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7)); return d.toISOString().slice(0, 10); };
+
+/** Surowe emisje {m: {stacja: ["DD GG:MM"]}} → lista emisji jednostek bez powtórzeń w sieciach. */
+function emisjeJednostek(surowe) {
+  const wszystkie = [];
+  Object.keys(surowe).forEach((m) => Object.keys(surowe[m]).forEach((s) => surowe[m][s].forEach((t) => wszystkie.push({ s, j: siecStacjiK(s) || s, c: m + '-' + t.slice(0, 2) + ' ' + t.slice(3, 8) }))));
+  wszystkie.sort((a, b) => (a.c < b.c ? -1 : a.c > b.c ? 1 : 0));
+  const ostatniaWSieci = {}, wynik = [];
+  wszystkie.forEach((e) => {
+    if (e.j !== e.s) {   // stacja w sieci: ta sama piosenka w ciągu 3 min na innej stacji sieci = wspólne pasmo
+      const ms = Date.parse(e.c.replace(' ', 'T') + ':00Z'), p = ostatniaWSieci[e.j];
+      if (p && ms - p.ms <= 180000 && p.s !== e.s) { p.stacje.push(e.s); return; }
+      e.ms = ms; e.stacje = [e.s]; ostatniaWSieci[e.j] = e;
+    }
+    wynik.push(e);
+  });
+  return wynik;
+}
+
+WIDOKI.utwor = (box, k) => {
+  box.replaceChildren(...szkielet(3));
+  serwerP('profilUtworu', k).then((p) => rysujUtwor(box, k, p)).catch((e) => bladW(box, e));
+};
+
+function rysujUtwor(box, k, p) {
+  const m = p.meta || {};
+  const wydanie = m.d || m.y;
+  const gwiazda = el('button', { class: 'ikona-btn' + (p.moje.ulubiony ? ' akt' : ''), title: 'Ulubiony utwór', 'aria-label': 'Ulubiony utwór', html: svgIkona(IK.gwiazda),
+    onclick: (e) => { const b = e.currentTarget, nowy = !b.classList.contains('akt'); serwer('zapiszMoje', { ulubionyUtwor: [k, nowy] }).then((mm) => { S.moje = mm; b.classList.toggle('akt', nowy); p.moje.ulubiony = nowy; toast(nowy ? 'Dodano do ulubionych utworów' : 'Usunięto z ulubionych'); }).catch((er) => toast(er.message)); } });
+  const album = el('span');
+  const glowa = el('div', { class: 'karta' },
+    el('div', { class: 'wiersz', style: { justifyContent: 'space-between', flexWrap: 'nowrap', alignItems: 'flex-start' } },
+      el('div', { style: { minWidth: 0 } }, el('h1', { style: { fontSize: '26px' } }, p.t),
+        el('button', { class: 'link', style: { fontSize: '17px' }, onclick: () => idz('wykonawca', wykonawcyKlucz(p.a)[0]) }, p.a)),
+      el('div', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, gwiazda,
+        el('button', { class: 'ikona-btn', title: 'Powiadamiaj o emisjach', 'aria-label': 'Powiadamiaj o emisjach', html: svgIkona(IK.alerty), onclick: () => dodajAlert({ typ: 'utwor', klucz: k, opis: p.a + ' – ' + p.t }) }))),
+    el('div', { class: 'wiersz', style: { marginTop: '8px' } },
+      el('span', { class: 'znacznik' }, wydanie ? 'Wydanie: ' + (m.d ? dataPL(m.d) : m.y) + (m.z ? ' · ' + m.z : '') : 'Data wydania: jeszcze nieustalona'),
+      m.c ? el('span', { class: 'znacznik' }, m.c === 'PL' ? 'Polski wykonawca' : 'Zagraniczny wykonawca' + (m.cc ? ' (' + krajNazwa(m.cc) + ')' : '')) : null,
+      (m.g || []).length ? el('span', { class: 'znacznik' }, [].concat(m.g).join(', ')) : null,
+      m.j ? el('span', { class: 'znacznik', title: 'Język tekstu wg lrclib.net' }, 'Tekst: ' + (JEZYKI[m.j] || m.j)) : null,
+      m.w === 2 ? el('span', { class: 'znacznik wulg-zn w2', title: 'Wg listy słów – szczegóły: Tekst → Podświetl wulgaryzmy' }, 'Wulgaryzmy w tekście') : m.w === 1 ? el('span', { class: 'znacznik wulg-zn w1', title: 'Łagodniejsze albo dwuznaczne słowa – Tekst → Podświetl wulgaryzmy' }, 'Słowa do rozważenia') : null, album),
+    el('div', { style: { marginTop: '12px' } }, Odsluch.odtwarzacz({ a: p.a, t: p.t, y: m.y, sp: m.sp || p.spotifyCache || undefined }, (f) => {
+      album.replaceChildren(f.album ? el('span', { class: 'znacznik', title: 'Album wg Apple Music' }, '💿 ' + f.album + (f.wydanie ? ' (' + f.wydanie.slice(0, 4) + ')' : '')) : '',
+        f.gatunek && !(m.g || []).length ? el('span', { class: 'znacznik', title: 'Gatunek wg Apple Music' }, f.gatunek) : '');
+      album.className = 'wiersz'; album.style.display = 'contents';
+      dane.itunes = f; rysujDaneU();
+    })));
+
+  const kKafle = el('div'), kStacje = el('div', {}, szkielet(1)), kPierwsze = el('div', {}, szkielet(1)), kLans = el('div', {}, szkielet(1));
+  const kOs = el('div', { class: 'wykres' }), kOsOpis = el('div'), kMapa = el('div'), kWszystkie = el('div', {}, szkielet(1)), kPostep = el('p', { class: 'sub' });
+  const kMiejsca = el('div', {}, szkielet(1)), kPodobne = el('div', {}, szkielet(1)), kCiek = el('div', {}, el('p', { class: 'stan' }, 'Sprawdzam w bazie Songstera…'));
+  const kTekst = el('div'), kMoje = el('div'), kDane = el('div');
+  const dane = { itunes: null, mb: null, mbBlad: null, mbLaduje: true };
+  const rysujDaneU = () => rysujDane(kDane, p, m, dane);
+  const rysujKafle = (st, pierwsza) => kKafle.replaceChildren(kafle([
+    ['Emisji łącznie', fmt(st ? st.emisji : p.n), st && st.emisji !== p.n ? 'bez powtórzeń wspólnych pasm sieci' : 'wszystkie stacje, cała historia'],
+    ['Stacji', fmt(st ? st.jednostek : p.stacji), 'grało ten utwór'],
+    ['Pierwsza emisja', dataPL(pierwsza ? pierwsza.c : p.pierwsza), pierwsza ? nazwa(pierwsza.j) + ', ' + pierwsza.c.slice(11) : ''],
+    ['Ostatnio', miesPL(p.ostatni), p.dzis.length ? 'dziś: ' + p.dzis.length + '×' : 'miesiąc ostatniej emisji'],
+    wydanie && pierwsza ? ['Od wydania do radia', (() => { const d = m.d ? roznicaDni(m.d, pierwsza.c) : null; return d != null ? (d >= 0 ? fmt(d) + ' dni' : 'przed wydaniem') : fmt(+pierwsza.c.slice(0, 4) - m.y) + ' lat'; })(), 'pierwsza emisja w bazie'] : null]));
+  rysujKafle(null, null);
+
+  box.replaceChildren(glowa, spisSekcji(box, [['Dane', 'Dane utworu'], ['Przegląd', 'Życie utworu'], ['Stacje', ['Na których stacjach', 'Pierwsze stacje']], ['Kiedy', ['Kiedy jest grany', 'Najlepsze miejsca']], ['Emisje', 'Wszystkie emisje'], ['Podobne', ['Podobne utwory', 'Inne wersje']], ['Tekst', ['Tekst', 'Moje']]]), kKafle,
+    p.dzis.length ? karta('Dziś na antenie', null, el('div', { class: 'wiersz' }, p.dzis.sort((a, b) => (a.g < b.g ? -1 : 1)).map((d) => el('button', { class: 'chip', onclick: () => idz('stacja', siecStacjiK(d.s) || d.s) }, logo(d.s, 'm'), d.g + ' ' + nazwa(d.s))))) : null,
+    karta('Dane utworu', 'Pogrupowane według rodzaju informacji; szary skrót przy wartości to źródło (najedź albo przytrzymaj palec).', kDane),
+    karta('Ciekawostki', null, kCiek),
+    karta('Życie utworu', 'Emisje tydzień po tygodniu w całym radiu; kropki = tygodnie, w których utwór zagrała pierwszy raz kolejna stacja.', kPostep, kOs, kOsOpis),
+    el('div', { class: 'siatka2' },
+      karta('Pierwsze stacje', 'Kto zagrał ten utwór najwcześniej (w danych, które mamy – zakres każdej stacji jest w „Stan danych”).', kPierwsze),
+      karta('Wylansowały', 'Stacje, które grały utwór, zanim osiągnął szczyt popularności w całym radiu – według liczby emisji przed tygodniem szczytu.', kLans)),
+    karta('Na których stacjach', 'Kliknij stację, aby zobaczyć jej wszystkie emisje tego utworu.', kStacje),
+    el('div', { class: 'siatka2' }, karta('Kiedy jest grany', 'Dzień tygodnia × godzina, wszystkie emisje.', kMapa), karta('Najlepsze miejsca', 'Tygodniowy ranking całego radia (poniedziałek–niedziela), ostatnie 3 lata emisji; tygodnie, w których utwór był w pierwszej 300.', kMiejsca)),
+    karta('Wszystkie emisje', null, kWszystkie),
+    el('div', { class: 'siatka2' },
+      karta('Podobne utwory', 'Grane w podobnych proporcjach na tych samych stacjach (rok ' + (p.lata[p.lata.length - 1] || '–') + ').', kPodobne),
+      karta('Inne wersje i utwory wykonawcy', null,
+        p.wersje.length ? el('div', {}, el('h3', {}, 'Inne wersje (remiksy, wersje radiowe, na żywo)'), tabela([['Utwór', utworKomorka], ['Emisje', (x) => fmt(x.n), 'num']], p.wersje, { klik: (x) => idz('utwor', x.k) })) : el('p', { class: 'opis' }, 'Brak innych wersji tego tytułu w bazie.'),
+        p.inneUtwory.length ? el('div', { style: { marginTop: '10px' } }, el('h3', {}, 'Najczęściej grane utwory wykonawcy'), tabela([['Tytuł', (x) => x.t], ['Emisje', (x) => fmt(x.n), 'num']], p.inneUtwory, { klik: (x) => idz('utwor', x.k) })) : null)),
+    el('div', { class: 'siatka2' }, karta('Tekst', 'Z lrclib.net (otwarta baza tekstów), na żądanie.', kTekst), karta('Moje', 'Tagi i notatka widoczne tylko dla Ciebie.', kMoje)));
+
+  // ---- wszystkie emisje: rok po roku, równolegle ----
+  const lata = {};
+  p.miesiace.forEach((mm) => (lata[mm.slice(0, 4)] = lata[mm.slice(0, 4)] || []).push(mm));
+  const surowe = {}, klucze = Object.keys(lata);
+  let gotowe = 0;
+  kPostep.textContent = klucze.length ? `Wczytuję emisje: 0 z ${klucze.length} lat…` : '';
+  Promise.all(klucze.map((r) => serwerP('emisjeUtworu', k, lata[r]).then((w) => { Object.assign(surowe, w.emisje); gotowe++; kPostep.textContent = gotowe < klucze.length ? `Wczytuję emisje: ${gotowe} z ${klucze.length} lat…` : ''; })))
+    .then(() => {
+      const em = emisjeJednostek(surowe);
+      if (!em.length) {
+        [kStacje, kPierwsze, kLans, kWszystkie].forEach((b) => b.replaceChildren(el('p', { class: 'opis' }, 'Brak szczegółowych emisji (paczki emisji są przeliczane w nocy po nowych danych).')));
+        kOs.replaceChildren(); return;
+      }
+      analizaEmisji(p, em, { kStacje, kPierwsze, kLans, kOs, kOsOpis, kMapa, kWszystkie, rysujKafle });
+    }).catch((e) => { kPostep.textContent = ''; [kStacje, kPierwsze, kLans, kWszystkie].forEach((b) => b.replaceChildren(el('p', { class: 'blad' }, e.message))); });
+
+  serwerP('najlepszeMiejsca', k, p.miesiace).then((r) => {
+    if (!r.najlepsze) { kMiejsca.replaceChildren(el('p', { class: 'opis' }, 'Utwór nie był w żadnym tygodniu w pierwszej 300 całego radia (albo tygodnie jeszcze się liczą w Odbiorniku).')); return; }
+    const b = r.najlepsze;
+    kMiejsca.replaceChildren(kafle([['Najwyżej', b.miejsce + '. miejsce', 'tydzień od ' + dataPL(b.tydzien) + ', ' + fmt(b.n) + ' emisji'], ['Tygodni w top 10', fmt(r.wTop10), 'z ' + fmt(r.tygodnie.length) + ' tygodni w pierwszej ' + fmt(r.zTop || 300)]]),
+      el('div', { class: 'wykres', style: { marginTop: '10px' } }, (() => { const w = el('div'); setTimeout(() => (() => { const naj = Math.max(3, ...r.tygodnie.map((t) => Math.min(t.miejsce, 200))); linie(w, r.tygodnie.map((t) => dataPL(t.tydzien, false)), [{ nazwa: 'Miejsce', wartosci: r.tygodnie.map((t) => -Math.min(t.miejsce, 200)) }], { wys: 150, format: (v) => Math.round(-v) + '.', minY: -naj, maxY: -1, calkowite: true }); })(), 0); return w; })()),
+      el('p', { class: 'sub' }, 'Wyżej = lepsze miejsce (najniżej pokazywane 200.).'));
+  }).catch((e) => kMiejsca.replaceChildren(el('p', { class: 'blad' }, e.message)));
+
+  if (p.lata.length) serwerP('podobneUtwory', k, p.lata[p.lata.length - 1]).then((r) => kPodobne.replaceChildren(tabela([['Utwór', utworKomorka], ['Podobieństwo', (x) => proc(x.pod), 'num']], r.podobne, { klik: (x) => idz('utwor', x.k), pusta: r.info || 'Za mało danych.' })))
+    .catch((e) => kPodobne.replaceChildren(el('p', { class: 'blad' }, e.message)));
+  else kPodobne.replaceChildren(el('p', { class: 'opis' }, 'Za mało danych.'));
+
+  rysujDaneU();
+  dane.pobierzMB = () => {
+    dane.mbLaduje = true; dane.mbBlad = null; rysujDaneU();
+    serwerP('szczegolyUtworu', p.a, p.t).then((r) => { dane.mb = r; }).catch((e) => { dane.mbBlad = e.message; }).finally(() => { dane.mbLaduje = false; rysujDaneU(); });
+  };
+  // szczegóły zebrane w tle (zadanie Metadane, tryb szczegoly) – bez zapytania do MusicBrainz z serwera panelu
+  if (m.sz) { dane.mb = mbZMetadanych(m, p); dane.mbLaduje = false; rysujDaneU(); } else dane.pobierzMB();
+  if (m.dg) { dane.dgLaduje = true; serwerP('discogsWydanie', m.dg, p.t).then((r) => { dane.dg = r; }).catch((e) => { dane.dgBlad = e.message; }).finally(() => { dane.dgLaduje = false; rysujDaneU(); }); }
+  pokazCiekawostki(kCiek, p);
+  kTekst.replaceChildren(el('button', { class: 'przycisk drugi', onclick: () => pokazTekst(kTekst, p) }, 'Pokaż tekst'));
+  rysujMoje(kMoje, k, p);
+}
+
+// ---------------- dane utworu: metadane + Apple Music + MusicBrainz ----------------
+const ROLE_MB = { composer: 'Kompozytor', lyricist: 'Autor słów', writer: 'Autor (muzyka i słowa)', arranger: 'Aranżacja', translator: 'Tłumaczenie tekstu',
+  librettist: 'Libretto', producer: 'Producent', 'co-producer': 'Współproducent', mix: 'Miks', engineer: 'Realizacja', 'recording': 'Nagranie', mastering: 'Mastering',
+  'audio': 'Realizacja dźwięku', vocal: 'Wokal', instrument: 'Instrumenty', programming: 'Programowanie', performer: 'Wykonanie', remixer: 'Remiks',
+  'phonographic copyright': 'Prawa fonograficzne (℗)', copyright: 'Prawa autorskie (©)', 'performing orchestra': 'Orkiestra', conductor: 'Dyrygent', 'chorus master': 'Chórmistrz', revised: 'Opracowanie' };
+const TYPY_WYDANIA = { Album: 'album', Single: 'singel', EP: 'EP', Broadcast: 'audycja', Other: 'inne', Compilation: 'kompilacja', Soundtrack: 'ścieżka dźwiękowa', Live: 'koncertowe', Remix: 'remiksy', 'DJ-mix': 'DJ mix', 'Mixtape/Street': 'mixtape' };
+const minSek = (ms) => (ms ? Math.floor(ms / 60000) + ':' + String(Math.round(ms / 1000) % 60).padStart(2, '0') : null);
+const dataDokladna = (d) => (!d ? null : d.length >= 10 ? dataPL(d) : d.length === 7 ? miesPL(d) : d);
+/** Role z MusicBrainz pogrupowane: „Kompozytor: A, B”; instrumenty i wokal z atrybutami (np. gitara). */
+function roleMB(lista) {
+  const g = {};
+  (lista || []).forEach((x) => { const r = ROLE_MB[x.typ] || x.typ; const kto = x.kto + (x.atr && x.atr.length && ['instrument', 'vocal'].includes(x.typ) ? ' (' + x.atr.join(', ') + ')' : ''); (g[r] = g[r] || []).includes(kto) || g[r].push(kto); });
+  return g;
+}
+/** Pola z metadanych (kp, as, au, ar, pr, isrc, iswc, wy, mb) w kształcie wyniku szczegolyUtworu. */
+function mbZMetadanych(m, p) {
+  if (!m.mb && !m.wd && !m.dg) return { brak: true };
+  const role = (lista, typ) => (lista || []).map((kto) => ({ typ, kto, atr: [] }));
+  const wy = m.wy;
+  return { mbid: m.mb || null, wd: m.wd || null, dg: m.dg || null, zt: m.zt === 'Wikidata' ? 'WD' : m.zt === 'Discogs' ? 'DG' : 'MB', tytul: p.t, dlugosc: null, pierwszeWydanie: null, wykonawcy: p.a, isrc: [].concat(m.isrc || []), gatunki: [], wydania: 0,
+    nagranie: role(m.pr, 'producer'),
+    utwory: [{ tytul: p.t, iswc: [].concat(m.iswc || []), jezyki: [], autorzy: role(m.kp, 'composer').concat(role(m.as, 'lyricist'), role(m.au, 'writer'), role(m.ar, 'arranger')) }],
+    wydanie: wy ? { tytul: wy.t, data: wy.d, kraj: wy.k || null, typ: wy.typ || null, typy2: [], mbid: wy.id, wytwornie: wy.lab || m.wlab || [] } : m.wlab ? { wytwornie: m.wlab } : null };
+}
+// role Discogs (angielskie nazwy z bazy) → polskie; nieznane zostają w oryginale
+const ROLE_DG = { 'Written-By': 'Autor (muzyka i słowa)', 'Music By': 'Kompozytor', 'Lyrics By': 'Autor słów', 'Composed By': 'Kompozytor', 'Words By': 'Autor słów',
+  'Arranged By': 'Aranżacja', Producer: 'Producent', 'Co-producer': 'Współproducent', 'Executive-Producer': 'Producent wykonawczy', 'Mixed By': 'Miks', 'Mastered By': 'Mastering',
+  'Recorded By': 'Nagranie', Engineer: 'Realizacja', 'Recording Engineer': 'Realizacja nagrań', 'Programmed By': 'Programowanie', Vocals: 'Wokal', 'Backing Vocals': 'Chórki',
+  Guitar: 'Gitara', 'Electric Guitar': 'Gitara elektryczna', 'Acoustic Guitar': 'Gitara akustyczna', Bass: 'Gitara basowa', 'Bass Guitar': 'Gitara basowa', Drums: 'Perkusja',
+  Keyboards: 'Instrumenty klawiszowe', Piano: 'Fortepian', Synthesizer: 'Syntezator', Strings: 'Smyczki', Featuring: 'Gościnnie', Remix: 'Remiks', 'Edited By': 'Montaż',
+  'Photography By': 'Zdjęcia', Design: 'Projekt graficzny', Artwork: 'Oprawa graficzna', 'Art Direction': 'Kierownictwo artystyczne', 'Liner Notes': 'Tekst we wkładce', Lacquer: 'Lakier (wytłoczenie)' };
+const FIRMY_DG = { 'Phonographic Copyright (p)': '℗ Prawa fonograficzne', 'Copyright (c)': '© Prawa autorskie', 'Published By': 'Wydawca muzyczny', 'Recorded At': 'Nagrano w',
+  'Mixed At': 'Miks w', 'Mastered At': 'Mastering w', 'Pressed By': 'Tłocznia', 'Manufactured By': 'Produkcja', 'Distributed By': 'Dystrybucja', 'Marketed By': 'Marketing',
+  'Licensed From': 'Licencja od', 'Licensed To': 'Licencja dla', 'Made By': 'Wykonanie', 'Produced At': 'Produkcja w', 'Glass Mastered At': 'Glass mastering w' };
+// kategorie ról: kto stworzył utwór / kto go wykonał i zrealizował
+const ROLE_TWORCY = ['Kompozytor', 'Autor słów', 'Autor (muzyka i słowa)', 'Aranżacja', 'Tłumaczenie tekstu', 'Libretto', 'Opracowanie'];
+const ROLE_POMIN_DG = ['Zdjęcia', 'Projekt graficzny', 'Oprawa graficzna', 'Kierownictwo artystyczne', 'Tekst we wkładce', 'Lakier (wytłoczenie)'];
+/**
+ * Dane utworu pogrupowane według rodzaju informacji (nie według źródła): kto stworzył, wykonanie i realizacja, wydanie,
+ * brzmienie i treść, popularność, prawa i identyfikatory. Wartości z kilku źródeł są scalane; skrót źródła po najechaniu.
+ * Statystyki społeczności i rynku Discogs (kolekcje, oceny, oferty) celowo pominięte (decyzja użytkownika 14.11.2026).
+ */
+function rysujDane(box, p, m, dane) {
+  const it = dane.itunes, mb = dane.mb && !dane.mb.brak ? dane.mb : null, dg = dane.dg && !dane.dg.brak ? dane.dg : null;
+  const link = (href, tekst) => el('a', { href, target: '_blank', rel: 'noopener' }, tekst);
+  const ZR = { MB: 'MusicBrainz', WD: 'Wikidata', DG: 'Discogs', AM: 'Apple Music', SG: 'Songster', BZ: 'Music Base', LR: 'lrclib.net', DZ: 'Deezer', YT: 'YouTube', LB: 'ListenBrainz' };
+  const zr = (k) => { const l = [...new Set((k || []).filter(Boolean))]; return l.length ? el('span', { class: 'du-zr', title: 'Źródło: ' + l.map((x) => ZR[x] || x).join(', ') }, l.join(' · ')) : null; };
+  const csv = [];   // eksport: [grupa, pole, wartość, źródło]
+  const grupa = (tytul, ikona, wiersze, pusto) => {
+    const w = wiersze.filter((x) => x && x[1] != null && x[1] !== '' && !(Array.isArray(x[1]) && !x[1].length));
+    w.forEach((x) => csv.push([tytul, x[0], x[1] && x[1].nodeType ? x[1].textContent : String(x[1]), [...new Set((x[2] || []).filter(Boolean))].map((z) => ZR[z] || z).join(', ')]));
+    if (!w.length && !pusto) return null;
+    return el('section', { class: 'du-grupa' }, el('h3', {}, el('span', { class: 'du-ik', 'aria-hidden': 'true' }, ikona), tytul),
+      w.length ? el('dl', {}, w.map(([pole, wart, zrod, pod]) => el('div', { class: 'du-wiersz' }, el('dt', {}, pole),
+        el('dd', {}, el('span', { class: 'du-w' }, wart), zr(zrod), pod ? el('div', { class: 'du-pod' }, pod) : null)))) : pusto);
+  };
+  // ---- role: MusicBrainz/Wikidata (utwór i nagranie) + kredyty Discogs, scalone według roli ----
+  const POLE_ROLI = { Kompozytor: 'kp', 'Autor słów': 'as', 'Autor (muzyka i słowa)': 'au', Aranżacja: 'ar', Producent: 'pr' };
+  const SKROT = { Discogs: 'DG', Wikidata: 'WD', MusicBrainz: 'MB' };
+  const zrRoli = (r) => { const z = (m.zts || {})[POLE_ROLI[r]] || (mb && mb.zt === 'WD' ? 'Wikidata' : mb && mb.zt === 'DG' ? 'Discogs' : null); return SKROT[z] || 'MB'; };
+  const role = {};   // rola → { kto: [], zr: [] }
+  const dodaj = (r, kto, z) => { const e = role[r] = role[r] || { kto: [], zr: [] }; kto.forEach((x) => { if (!e.kto.some((y) => y.toLowerCase() === x.toLowerCase())) e.kto.push(x); }); if (!e.zr.includes(z)) e.zr.push(z); };
+  if (mb) {
+    (mb.utwory || []).forEach((u) => Object.entries(roleMB(u.autorzy)).forEach(([r, kto]) => dodaj(r, kto, zrRoli(r))));
+    Object.entries(roleMB(mb.nagranie)).forEach(([r, kto]) => dodaj(r, kto, zrRoli(r)));
+  }
+  if (dg) Object.entries(dg.kredyty || {}).forEach(([r, kto]) => { const pl = ROLE_DG[r] || r; if (!ROLE_POMIN_DG.includes(pl)) dodaj(pl, kto, 'DG'); });
+  const tworcy = ROLE_TWORCY.filter((r) => role[r]).map((r) => [r, role[r].kto.join(', '), role[r].zr]);
+  const wykonanie = Object.keys(role).filter((r) => !ROLE_TWORCY.includes(r)).map((r) => [r, role[r].kto.join(', '), role[r].zr]);
+  // ---- daty: jedna (najwcześniejsza dokładna), pozostałe jako przypis ----
+  const daty = [[m.d, m.z === 'MusicBrainz' ? 'MB' : 'SG'], [mb && mb.pierwszeWydanie, 'MB'], [mb && mb.wydanie && mb.wydanie.data, 'MB'], [it && it.wydanie, 'AM'], [dg && dg.wydano, 'DG']]
+    .filter((x) => x[0] && String(x[0]).length >= 10).sort((x, y) => (x[0] < y[0] ? -1 : 1));
+  const dataGl = daty[0], inneDaty = dataGl ? [...new Set(daty.slice(1).filter((x) => x[0] !== dataGl[0]).map((x) => ZR[x[1]] + ': ' + dataPL(x[0])))] : [];
+  const wy = mb && mb.wydanie;
+  const typWyd = wy ? [TYPY_WYDANIA[wy.typ] || wy.typ].concat((wy.typy2 || []).map((x) => TYPY_WYDANIA[x] || x)).filter(Boolean).join(', ') : null;
+  const gatZr = [m.g ? 'SG' : null, m.dp ? 'BZ' : null, it && it.gatunek ? 'AM' : null, mb && (mb.gatunki || []).length ? 'MB' : null, dg && (dg.gatunki || []).concat(dg.style || []).length ? 'DG' : null];
+  const gatunki = [...new Set([].concat(m.dp ? ['disco polo'] : [], m.g || [], it && it.gatunek ? [it.gatunek] : [], mb ? mb.gatunki || [] : [], dg ? (dg.gatunki || []).concat(dg.style || []) : []).map((g) => String(g).toLowerCase()))];
+  const czas = minSek(m.l ? m.l * 1000 : mb && mb.dlugosc) || (it && minSek(it.czas)) || (dg && dg.czas) || null;
+  const wytwornie = [...new Set([].concat(wy && wy.wytwornie || [], dg ? dg.wytwornie || [] : []))];
+  const kraj = (k) => (k === 'XW' ? 'cały świat' : k === 'XE' ? 'Europa' : krajNazwa(k));
+  const idDg = (typ) => (dg ? (dg.identyfikatory || []).filter((x) => x.typ === typ).map((x) => x.wart + (x.opis ? ' (' + x.opis + ')' : '')) : []);
+  const isrc = [...new Set([].concat(mb ? mb.isrc || [] : [], [].concat(m.isrc || []), idDg('ISRC')))];
+  const firmy = dg ? (dg.firmy || []).reduce((o, x) => { const r = FIRMY_DG[x.rola] || x.rola; (o[r] = o[r] || []).includes(x.kto) || (o[r] = o[r] || []).push(x.kto); return o; }, {}) : {};
+  const PRAWA = ['℗ Prawa fonograficzne', '© Prawa autorskie', 'Wydawca muzyczny', 'Licencja od', 'Licencja dla'];
+  const brakTworcow = el('p', { class: 'du-pusto' }, dane.mbLaduje ? 'Szukam twórców…' : 'Kompozytora i autora słów nie ma jeszcze w otwartych bazach (MusicBrainz, Wikidata, Discogs) – nowe utwory bywają opisane dopiero po czasie.',
+    !dane.mbLaduje && mb && mb.mbid ? [' ', link('https:\/\/musicbrainz.org/recording/' + mb.mbid, 'Uzupełnij w MusicBrainz')] : null);
+  const grupy = [
+    grupa('Kto stworzył', '✎', [['Wykonawca', mb && mb.wykonawcy ? mb.wykonawcy : p.a, [mb && mb.wykonawcy ? 'MB' : 'BZ'], m.cc ? krajNazwa(m.cc) : m.c === 'PL' ? 'Polska' : m.c === 'INT' ? 'zagraniczny' : null]].concat(tworcy), tworcy.length ? null : brakTworcow),
+    grupa('Wykonanie i realizacja', '♫', wykonanie),
+    grupa('Wydanie', '◉', [
+      ['Data wydania', dataGl ? dataPL(dataGl[0]) : m.y ? String(m.y) : null, dataGl ? [dataGl[1]] : ['SG'], inneDaty.length ? 'Inne źródła: ' + inneDaty.join('; ') : null],
+      ['Pierwsze wydanie utworu', dg && dg.master && dg.master.rok && (!dataGl || String(dg.master.rok) < dataGl[0].slice(0, 4)) ? String(dg.master.rok) : null, ['DG']],
+      ['Album', it && it.album ? (it.albumLink ? link(it.albumLink, it.album) : it.album) : wy && wy.tytul ? (wy.mbid ? link('https:\/\/musicbrainz.org/release/' + wy.mbid, wy.tytul) : wy.tytul) : dg ? link(dg.link, dg.tytul) : null,
+        [it && it.album ? 'AM' : wy && wy.tytul ? 'MB' : 'DG'], [typWyd, wy && wy.kraj ? kraj(wy.kraj) : null, it && it.nr ? 'utwór ' + it.nr + (it.zIlu ? ' z ' + it.zIlu : '') : dg && dg.pozycja ? 'pozycja ' + dg.pozycja : null].filter(Boolean).join(', ') || null],
+      ['Format', dg && (dg.formaty || []).length ? dg.formaty.join('; ') : null, ['DG']],
+      ['Wytwórnia', wytwornie.length ? wytwornie.join('; ') : null, [wy && (wy.wytwornie || []).length ? (wy.mbid ? 'MB' : m.zt === 'Discogs' ? 'DG' : 'WD') : null, dg && (dg.wytwornie || []).length ? 'DG' : null]],
+      ['Wydawnictw z nagraniem', mb && mb.wydania ? fmt(mb.wydania) : dg && dg.master && dg.master.wersji ? fmt(dg.master.wersji) : null, [mb && mb.wydania ? 'MB' : 'DG']]]),
+    grupa('Brzmienie i treść', '≈', [
+      ['Czas trwania', czas, [m.l || (mb && mb.dlugosc) ? 'MB' : it && it.czas ? 'AM' : 'DG']],
+      ['Tempo', m.bpm ? fmt(m.bpm, 0) + ' BPM' : null, ['DZ']],
+      ['Gatunek', gatunki.join(', ') || null, gatZr],
+      ['Język tekstu', m.j ? JEZYKI[m.j] || m.j : null, ['LR']],
+      ['Wulgaryzmy', m.w === 2 ? 'tak – do ocenzurowania' : m.w === 1 ? 'tylko słowa do rozważenia' : m.w === 0 ? 'nie znaleziono' : null, ['LR']],
+      ['Wersja explicit', m.ex === 1 || (it && it.ex) ? 'tak' : null, [m.ex === 1 ? 'DZ' : null, it && it.ex ? 'AM' : null]]]),
+    grupa('Popularność', '↗', [
+      ['W radiu', fmt(p.n) + ' emisji na ' + fmt(p.stacji) + ' stacjach', ['BZ'], 'pierwsza emisja ' + dataPL(p.pierwsza) + (String(p.pierwsza).length > 10 ? ', ' + String(p.pierwsza).slice(11, 16) : '')],
+      ['Teledysk w YouTube', m.ytv != null && m.yt ? link('https:\/\/www.youtube.com/watch?v=' + m.yt, fmt(m.ytv) + ' wyświetleń') : null, ['YT']],
+      ['Deezer', m.dzr ? 'ranking ' + fmt(m.dzr) : null, ['DZ'], m.dzr ? 'im więcej, tym popularniejszy' : null],
+      ['ListenBrainz', m.lbc != null && m.mb ? fmt(m.lbc) + ' odsłuchań, ' + fmt(m.lbu) + ' słuchaczy' : null, ['LB'], 'wskaźnik względny – tylko użytkownicy ListenBrainz']]),
+    grupa('Prawa i identyfikatory', '§', PRAWA.filter((r) => firmy[r]).map((r) => [r, firmy[r].join(', '), ['DG']]).concat([
+      ['ISRC (nagranie)', isrc.join(', ') || null, [mb && (mb.isrc || []).length ? 'MB' : null, idDg('ISRC').length ? 'DG' : null]],
+      ['ISWC (utwór)', mb ? [...new Set((mb.utwory || []).flatMap((u) => u.iswc || []))].join(', ') || null : null, ['MB']],
+      ['Organizacja zbiorowego zarządzania', idDg('Rights Society').join(', ') || null, ['DG']],
+      ['Kod wytwórni (LC)', idDg('Label Code').join(', ') || null, ['DG']],
+      ['Kod kreskowy', (wy && wy.kodKreskowy) || idDg('Barcode')[0] || null, [wy && wy.kodKreskowy ? 'MB' : 'DG']]])),
+  ].filter(Boolean);
+  const chip = (href, t) => el('a', { class: 'chip', href, target: '_blank', rel: 'noopener' }, t);
+  const linki = el('div', { class: 'wiersz du-linki' }, el('span', { class: 'sub' }, 'Otwórz w:'),
+    m.sp ? chip('https:\/\/open.spotify.com/track/' + m.sp, 'Spotify') : null,
+    it && it.link ? chip(it.link, 'Apple Music') : null,
+    m.dz ? chip('https:\/\/www.deezer.com/track/' + m.dz, 'Deezer') : null,
+    m.yt ? chip('https:\/\/www.youtube.com/watch?v=' + m.yt, 'YouTube') : null,
+    mb && mb.mbid ? chip('https:\/\/musicbrainz.org/recording/' + mb.mbid, 'MusicBrainz') : null,
+    mb && mb.wd ? chip('https:\/\/www.wikidata.org/wiki/' + mb.wd, 'Wikidata') : null,
+    m.dg || (mb && mb.dg) ? chip('https:\/\/www.discogs.com/release/' + (m.dg || mb.dg), 'Discogs') : null,
+    el('span', { class: 'du-klucz' }, el('code', { title: 'Klucz utworu w Music Base' }, p.k),
+      el('button', { class: 'przycisk drugi maly', html: svgIkona(IK.eksport) + 'CSV', onclick: (e) => eksportuj(e.currentTarget, 'Dane utworu ' + p.a + ' – ' + p.t, [['Grupa', (x) => x[0]], ['Pole', (x) => x[1]], ['Wartość', (x) => x[2]], ['Źródło', (x) => x[3]]], csv) })));
+  const stan = dane.mbBlad ? el('div', { class: 'wiersz' }, el('p', { class: 'blad' }, 'MusicBrainz: ' + dane.mbBlad), el('button', { class: 'przycisk drugi maly', onclick: () => dane.pobierzMB() }, 'Spróbuj ponownie'))
+    : dane.mbLaduje || dane.dgLaduje ? el('p', { class: 'stan' }, 'Uzupełniam dane z otwartych baz…') : null;
+  box.replaceChildren(el('div', { class: 'du-siatka' }, grupy), stan, linki);
+}
+
+function analizaEmisji(p, em, b) {
+  // jednostki
+  const jedn = {};
+  em.forEach((e) => {
+    const x = jedn[e.j] = jedn[e.j] || { id: e.j, n: 0, pierwsza: e.c, ostatnia: e.c, mies: {}, emisje: [] };
+    x.n++; x.ostatnia = e.c; x.emisje.push(e);
+    x.mies[e.c.slice(0, 7)] = (x.mies[e.c.slice(0, 7)] || 0) + 1;
+  });
+  const lista = Object.values(jedn).sort((a, c) => c.n - a.n);
+  b.rysujKafle({ emisji: em.length, jednostek: lista.length }, em[0]);
+  // tygodnie
+  const tyg = {};
+  em.forEach((e) => { const t = poniedzialekTyg(e.c); tyg[t] = (tyg[t] || 0) + 1; });
+  const pierwszyT = poniedzialekTyg(em[0].c), ostatniT = poniedzialekTyg(em[em.length - 1].c), os = [];
+  for (let t = pierwszyT; t <= ostatniT; t = dodajDni(t, 7)) os.push(t);
+  const szczyt = os.reduce((a, t) => ((tyg[t] || 0) > (tyg[a] || 0) ? t : a), os[0]);
+  const debiutyTyg = {};
+  lista.forEach((x) => { debiutyTyg[poniedzialekTyg(x.pierwsza)] = (debiutyTyg[poniedzialekTyg(x.pierwsza)] || []).concat(x.id); });
+  // oś życia (przy długiej historii – miesiące)
+  if (os.length > 160) {
+    const mies = {}, mOs = [];
+    em.forEach((e) => { mies[e.c.slice(0, 7)] = (mies[e.c.slice(0, 7)] || 0) + 1; });
+    const debM = {};
+    lista.forEach((x) => { (debM[x.pierwsza.slice(0, 7)] = debM[x.pierwsza.slice(0, 7)] || []).push(x.id); });
+    for (let mm = em[0].c.slice(0, 7); mm <= em[em.length - 1].c.slice(0, 7); mm = mm.slice(5) === '12' ? (+mm.slice(0, 4) + 1) + '-01' : mm.slice(0, 5) + String(+mm.slice(5) + 1).padStart(2, '0')) mOs.push(mm);
+    slupki(b.kOs, mOs.map(miesPL), mOs.map((x) => mies[x] || 0), { minEtykieta: 60, znaczniki: mOs.map((x) => !!debM[x]),
+      opis: (e, v, i) => `${e}: <b>${fmt(v)}</b> emisji` + (debM[mOs[i]] ? '<br>Pierwszy raz: ' + debM[mOs[i]].map(nazwa).join(', ') : '') });
+  } else {
+    slupki(b.kOs, os.map((t) => dataPL(t, os.length < 30 || t.slice(5, 7) === '01')), os.map((t) => tyg[t] || 0), { minEtykieta: 64, znaczniki: os.map((t) => !!debiutyTyg[t]),
+      opis: (e, v, i) => `Tydzień od ${dataPL(os[i])}: <b>${fmt(v)}</b> emisji` + (debiutyTyg[os[i]] ? '<br>Pierwszy raz: ' + debiutyTyg[os[i]].map(nazwa).join(', ') : '') });
+  }
+  const tygNaAntenie = os.filter((t) => tyg[t]).length;
+  b.kOsOpis.replaceChildren(el('p', { class: 'sub', style: { marginTop: '6px' } },
+    `Szczyt: tydzień od ${dataPL(szczyt)} (${fmt(tyg[szczyt])} emisji), ${fmt(roznicaDni(em[0].c, szczyt))} dni po pierwszej emisji. Tygodni na antenie: ${fmt(tygNaAntenie)} z ${fmt(os.length)}.`));
+  // pierwsze stacje
+  const wgPierwszej = lista.slice().sort((a, c) => (a.pierwsza < c.pierwsza ? -1 : 1));
+  b.kPierwsze.replaceChildren(tabela([['', (x, i) => i + 1, 'num'], ['Stacja', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), nazwa(x.id)), null, (x) => nazwa(x.id)],
+    ['Pierwsza emisja', (x) => dataPL(x.pierwsza) + ', ' + x.pierwsza.slice(11), 'num', (x) => x.pierwsza],
+    ['Po pierwszej', (x, i) => (i ? '+' + fmt(roznicaDni(wgPierwszej[0].pierwsza, x.pierwsza)) + ' dni' : 'pierwsza'), 'num']],
+  wgPierwszej, { limit: 12, klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Pierwsze stacje ' + p.a + ' – ' + p.t }));
+  // wylansowały: emisje przed tygodniem szczytu
+  const przed = {};
+  let sumaPrzed = 0;
+  em.forEach((e) => { if (e.c < szczyt) { przed[e.j] = (przed[e.j] || 0) + 1; sumaPrzed++; } });
+  const lans = Object.keys(przed).map((id) => ({ id, n: przed[id], pierwsza: jedn[id].pierwsza })).sort((a, c) => c.n - a.n || (a.pierwsza < c.pierwsza ? -1 : 1));
+  b.kLans.replaceChildren(lans.length ? el('div', {},
+    el('p', { class: 'opis', style: { marginBottom: '8px' } }, `Przed szczytem (tydzień od ${dataPL(szczyt)}): ${fmt(sumaPrzed)} emisji na ${lans.length} ${lans.length === 1 ? 'stacji' : 'stacjach'}.`),
+    tabela([['Stacja', (x) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(x.id, 'm'), nazwa(x.id)), null, (x) => nazwa(x.id)],
+      ['Przed szczytem', (x) => fmt(x.n), 'num', (x) => x.n], ['Udział', (x) => el('div', { class: 'pasek', style: { width: '80px', display: 'inline-block' } }, el('i', { style: { width: (100 * x.n / lans[0].n).toFixed(1) + '%' } })), 'tylko-szeroki', (x) => proc(x.n / sumaPrzed)],
+      ['Od', (x) => dataPL(x.pierwsza), 'num tylko-szeroki', (x) => x.pierwsza]], lans, { limit: 12, klik: (x) => idz('stacja', x.id), nazwaEksportu: 'Wylansowały ' + p.a + ' – ' + p.t }))
+    : el('p', { class: 'opis' }, 'Szczyt przypadł na pierwszy tydzień emisji – utwór od razu grało wiele stacji, więc żadna nie „wylansowała” go wcześniej.'));
+  // stacje
+  const otwarte = new Set();
+  const tab = el('div');
+  const rysujStacje = () => tab.replaceChildren(listaRozwijana(lista.map((x) => {
+    const wiersz = el('button', { class: 'st-wiersz', 'aria-expanded': otwarte.has(x.id) ? 'true' : 'false', onclick: () => { otwarte.has(x.id) ? otwarte.delete(x.id) : otwarte.add(x.id); rysujStacje(); } },
+      logo(x.id, 'm'), el('span', { class: 'n' }, nazwa(x.id)), el('span', { class: 'num' }, fmt(x.n)),
+      el('span', { class: 'pasek tylko-szeroki', style: { width: '110px' } }, el('i', { style: { width: (100 * x.n / lista[0].n).toFixed(1) + '%' } })),
+      el('span', { class: 'sub tylko-szeroki' }, dataPL(x.pierwsza) + ' – ' + dataPL(x.ostatnia)));
+    if (!otwarte.has(x.id)) return wiersz;
+    return el('div', {}, wiersz, el('div', { class: 'st-emisje' },
+      el('div', { class: 'wiersz', style: { marginBottom: '6px' } }, el('button', { class: 'przycisk drugi maly', onclick: () => idz('stacja', x.id) }, 'Profil stacji')),
+      ...grupujEmisje(x.emisje)));
+  }), 10));
+  rysujStacje();
+  b.kStacje.replaceChildren(tab);
+  // mapa godzin
+  const hw = {};
+  em.forEach((e) => { const d = new Date(e.c.slice(0, 10) + 'T12:00:00Z'), k2 = ((d.getUTCDay() + 6) % 7) * 24 + +e.c.slice(11, 13); hw[k2] = (hw[k2] || 0) + 1; });
+  b.kMapa.replaceChildren(mapaCieplna(hw));
+  // wszystkie emisje (najnowsze pierwsze), z filtrem stacji
+  const filtr = el('select', { 'aria-label': 'Stacja' }, el('option', { value: '' }, 'Wszystkie stacje (' + fmt(em.length) + ')'), lista.map((x) => el('option', { value: x.id }, nazwa(x.id) + ' (' + fmt(x.n) + ')')));
+  let ile = 30;
+  const lw = el('div');
+  const rysujWszystkie = () => {
+    const wiersze = em.filter((e) => !filtr.value || e.j === filtr.value).slice().reverse();
+    lw.replaceChildren(tabela([['Data', (e) => dataPL(e.c), 'num', (e) => e.c.slice(0, 10)], ['Godz.', (e) => e.c.slice(11), 'num'], ['Dzień', (e) => DNI[(new Date(e.c.slice(0, 10) + 'T12:00:00Z').getUTCDay() + 6) % 7]],
+      ['Stacja', (e) => el('span', { class: 'wiersz', style: { flexWrap: 'nowrap' } }, logo(e.j, 'm'), nazwa(e.j), e.stacje && e.stacje.length > 1 ? el('span', { class: 'sub' }, ' (' + e.stacje.map(nazwa).join(', ') + ')') : null), null,
+        (e) => nazwa(e.j) + (e.stacje && e.stacje.length > 1 ? ' (' + e.stacje.map(nazwa).join(', ') + ')' : '')]],
+    wiersze, { limit: ile, nazwaEksportu: 'Emisje ' + p.a + ' – ' + p.t }));
+  };
+  filtr.addEventListener('change', () => { ile = 30; rysujWszystkie(); });
+  rysujWszystkie();
+  b.kWszystkie.replaceChildren(el('div', { class: 'wiersz', style: { marginBottom: '8px' } }, filtr), lw);
+}
+
+/** Emisje jednej stacji pogrupowane po miesiącach (zwijane). */
+function grupujEmisje(lista) {
+  const mies = {};
+  lista.forEach((e) => (mies[e.c.slice(0, 7)] = mies[e.c.slice(0, 7)] || []).push(e));
+  return Object.keys(mies).sort().reverse().map((mm, i) => el('details', { open: i < 2 },
+    el('summary', {}, miesPL(mm) + ' · ' + mies[mm].length + '×'),
+    el('div', { class: 'emisje-lista' }, mies[mm].map((e) => el('span', {}, +e.c.slice(8, 10) + '.' + e.c.slice(5, 7) + ' ' + e.c.slice(11))))));
+}
+
+// ---------------- alert z profilu ----------------
+function dodajAlert(a) {
+  serwer('alerty').then((r) => {
+    if (r.alerty.some((x) => x.typ === a.typ && x.klucz === a.klucz)) { toast('Ten alert już jest.'); return; }
+    return serwer('zapiszAlerty', r.alerty.concat(a)).then(() => toast('Dodano alert: ' + a.opis + '. E-mail przy każdej emisji (sprawdzane co godzinę).', 4000));
+  }).catch((e) => toast(e.message));
+}
+
+// ---------------- tekst (lrclib.net, w przeglądarce) ----------------
+function pokazTekst(box, p) {
+  box.replaceChildren(...szkielet(1));
+  const a = p.a.split(/\s+(?:\/|&|feat\.?|ft\.?|x)\s+/i)[0];
+  fetch('https:\/\/lrclib.net/api/search?' + new URLSearchParams({ artist_name: a, track_name: p.t }))
+    .then((r) => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
+    .then((w) => {
+      const t = (w || []).find((x) => x.plainLyrics) || (w || []).find((x) => x.instrumental);
+      if (!t) { box.replaceChildren(el('p', { class: 'opis' }, 'lrclib.net nie ma tekstu tego utworu.')); return; }
+      if (t.instrumental) { box.replaceChildren(el('p', { class: 'opis' }, 'Utwór instrumentalny (wg lrclib.net).')); return; }
+      // podświetlanie słów do ocenzurowania przed emisją (lista heurystyczna – decyzja należy do redakcji)
+      const o = Wulg.oznacz(t.plainLyrics), pre = el('pre', { class: 'tekst-piosenki' }, o.czesci);
+      const lista = (slowa) => Object.entries(slowa).sort((a, b) => b[1] - a[1]).map(([w, n]) => w + (n > 1 ? ' ×' + n : '')).join(', ');
+      const opis = el('div', { class: 'wulg-opis', hidden: true },
+        o.w2 ? el('p', {}, el('span', { class: 'wulg w2' }, 'Do ocenzurowania'), ` ${o.w2} (${lista(o.slowa2)})`) : null,
+        o.w1 ? el('p', {}, el('span', { class: 'wulg w1' }, 'Do rozważenia'), ` ${o.w1} (${lista(o.slowa1)})`) : null,
+        el('p', { class: 'sub' }, o.w2 || o.w1 ? `W ${o.wierszy} ${o.wierszy === 1 ? 'wierszu' : 'wierszach'}. ` : 'Nie znaleziono słów z listy. ',
+          'Lista słów jest heurystyczna (polskie i angielskie, z odmianą) – przed emisją sprawdź tekst i wersję radiową utworu.'));
+      const przycisk = el('button', { class: 'przycisk drugi maly', 'aria-pressed': 'false', onclick: () => {
+        const wl = !pre.classList.contains('pokaz-wulg');
+        pre.classList.toggle('pokaz-wulg', wl); opis.hidden = !wl; przycisk.setAttribute('aria-pressed', String(wl));
+        przycisk.textContent = wl ? 'Ukryj podświetlenie' : 'Podświetl wulgaryzmy' + (o.w2 + o.w1 ? ` (${o.w2 + o.w1})` : '');
+        const pierwszy = wl && pre.querySelector('.wulg'); if (pierwszy) pierwszy.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      } }, 'Podświetl wulgaryzmy' + (o.w2 + o.w1 ? ` (${o.w2 + o.w1})` : ''));
+      box.replaceChildren(el('p', { class: 'sub' }, 'Dopasowanie: ' + t.artistName + ' – ' + t.trackName + (t.albumName ? ' (' + t.albumName + ')' : '')),
+        el('div', { class: 'wiersz', style: { margin: '6px 0' } }, przycisk, o.w2 ? znacznikWulg(2) : o.w1 ? znacznikWulg(1) : null), opis, pre);
+    }).catch((e) => box.replaceChildren(el('p', { class: 'blad' }, 'Nie udało się pobrać tekstu z lrclib.net: ' + e.message)));
+}
+
+// ---------------- moje: tagi i notatka (U8) ----------------
+function rysujMoje(box, k, p) {
+  const tagi = el('input', { type: 'text', value: p.moje.tagi.join(', '), placeholder: 'np. do auta, lato 2024', style: { width: '100%' }, 'aria-label': 'Tagi' });
+  const notatka = el('textarea', { rows: 3, placeholder: 'Notatka', style: { width: '100%' }, 'aria-label': 'Notatka' });
+  notatka.value = p.moje.notatka;
+  const zapisz = () => Promise.all([
+    serwer('zapiszMoje', { tagi: [k, tagi.value.split(',').map((x) => x.trim()).filter(Boolean)] }),
+    serwer('zapiszMoje', { notatka: [k, notatka.value.trim()] })]).then((w) => { S.moje = w[1]; _pamiec.forEach((v, kk) => { if (kk.startsWith('profilUtworu')) _pamiec.delete(kk); }); toast('Zapisano'); }).catch((e) => toast(e.message));
+  box.replaceChildren(el('label', { class: 'sub' }, 'Tagi (po przecinku)'), tagi, el('label', { class: 'sub', style: { marginTop: '8px', display: 'block' } }, 'Notatka'), notatka,
+    el('div', { class: 'wiersz', style: { justifyContent: 'flex-end', marginTop: '8px' } }, el('button', { class: 'przycisk', onclick: zapisz }, 'Zapisz')));
+}
+
+// ---------------- Songster: dane i ciekawostki ----------------
+let songsterObietnica = null;
+function songster() {
+  if (!songsterObietnica) {
+    const wczytaj = (src) => new Promise((ok, zle) => { const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = () => zle(new Error('nie wczytano ' + src)); document.head.append(s); });
+    songsterObietnica = Promise.all([wczytaj('https:\/\/matyz55.github.io/songster/songs.js'), wczytaj('https:\/\/matyz55.github.io/songster/facts.js')]).then(() => {
+      const idx = {};
+      (window.SONGS || []).forEach((s) => {
+        const tk = tytulKlucz(s.t);
+        [s.a, s.ma, s.ia].concat(s.x || []).filter(Boolean).forEach((n) => wykonawcyKlucz(n).forEach((w) => { if (!idx[w + '|' + tk]) idx[w + '|' + tk] = s; }));
+      });
+      return idx;
+    });
+    songsterObietnica.catch(() => { songsterObietnica = null; });
+  }
+  return songsterObietnica;
+}
+function pokazCiekawostki(box, p) {
+  songster().then((idx) => {
+    let s = null;
+    wykonawcyKlucz(p.a).some((w) => (s = idx[w + '|' + tytulKlucz(p.t)]));
+    if (!s) { box.replaceChildren(el('p', { class: 'opis' }, 'Tego utworu nie ma (jeszcze) w bazie Songstera.')); return; }
+    const out = [];
+    (s.f || []).forEach((f) => {
+      const [c, a, b, d] = f.split(':');
+      if (c === 'e') out.push(b === '1' ? `🏆 Zwycięzca Eurowizji ${a}` : (b ? `🎤 Eurowizja ${a}: ${b}. miejsce` : `🎤 Występ na Eurowizji ${a}`) + (d ? ` (${krajNazwa(d)})` : ''));
+      else if (c === 'jr') out.push(`🎤 Eurowizja Junior ${a}` + (b ? `: ${b}. miejsce` : ''));
+      else if (c === 'ep') out.push(`🎤 Preselekcje do Eurowizji ${a}` + (d ? `: ${d}. miejsce` : ''));
+      else if (c === 'w') out.push(`🎬 Zabrzmiała w: „${f.slice(2).replace(/꞉/g, ':')}”`);
+      else if (c === 't1') out.push('📻 1. miejsce na Liście Przebojów Programu Trzeciego');
+      else if (c === 'tp') out.push('📻 W plebiscycie „Polski Top Wszech Czasów” Trójki');
+      else if (c === 'o') out.push(`🎙 Śpiewana na ${a} Krajowym Festiwalu Piosenki Polskiej w Opolu`);
+      else if (c === 'b') out.push(b ? `🇺🇸 Billboard Year-End Hot 100 (${a}): ${b}. miejsce` : `🇺🇸 Na liście Billboard Year-End Hot 100 (${a})`);
+      else if (c === 'n') out.push(`🇵🇱 Nr 1 na liście przebojów w Polsce (${a})`);
+      else if (c === 'a') out.push(`🏆 ${{ oscar: 'Oscar za najlepszą piosenkę filmową', globe: 'Złoty Glob za najlepszą piosenkę', soty: 'Grammy – piosenka roku', roty: 'Grammy – nagranie roku', grammy: 'Nagroda Grammy', ghof: 'W Grammy Hall of Fame', lgrammy: 'Latin Grammy' }[a] || a} (${b}, wg Wikidata)`);
+    });
+    ((window.SONG_FACTS || {})[s.a + '|' + s.t] || []).forEach(([c, a, b]) => {
+      if (c === 'ml') out.push(`🎼 Muzyka i słowa: ${a} (wg Wikidata)`);
+      else if (c === 'm' && a && b) out.push(`🎼 Muzyka: ${a} · słowa: ${b} (wg Wikidata)`);
+      else if (c === 'm' && a) out.push(`🎼 Muzyka: ${a} (wg Wikidata)`);
+      else if (c === 'm' && b) out.push(`✍️ Słowa: ${b} (wg Wikidata)`);
+      else if (c === 'w') out.push(`🎬 Zabrzmiała w: „${a}”${b ? ' (' + b + ')' : ''} (wg Wikidata)`);
+      else if (c === 'al') out.push(`💿 Z albumu „${a}” (${b}) (wg Wikidata)`);
+      else if (c === 'pr') out.push(`🎚 Producent nagrania: ${a} (wg Wikidata)`);
+      else if (c === 'bo') out.push(`🔁 Oparta na utworze „${a}”${b ? ' (' + b + ')' : ''} (wg Wikidata)`);
+    });
+    const glowny = String(s.ma || s.a).split(/ & | feat\. /)[0];
+    ((window.ARTIST_FACTS || {})[glowny] || []).forEach(([c, a, b]) => {
+      if (c === 'bn') out.push(`🪪 ${glowny} to pseudonim – właściwie: ${a} (wg Wikidata)`);
+      else if (c === 'bp') out.push(`📍 ${glowny} – rok i miejsce urodzenia: ${b}, ${a} (wg Wikidata)`);
+      else if (c === 'fp') out.push(`📍 Zespół ${glowny} powstał w ${b} (${a}) (wg Wikidata)`);
+    });
+    box.replaceChildren(
+      el('p', { class: 'opis' }, `W grze Songster: rok ${s.y} (${s.src || 'źródło w VERIFICATION.md Songstera'})${s.cc ? ', kraj wykonawcy: ' + krajNazwa(s.cc) : ''}${(s.g || []).length ? ', gatunek: ' + s.g.join(', ') : ''}.`),
+      out.length ? el('ul', { class: 'lista-fakt' }, out.map((t) => el('li', {}, t))) : el('p', { class: 'opis' }, 'Songster nie ma o nim dodatkowych ciekawostek.'));
+  }).catch(() => box.replaceChildren(el('p', { class: 'opis' }, 'Nie udało się wczytać bazy Songstera (matyz55.github.io).')));
+}
+</script>
